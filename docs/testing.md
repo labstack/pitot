@@ -167,15 +167,61 @@ used by the dashboard. Retain failures and timeout counts alongside latency; do 
 make a slow or failed run disappear by retrying until it passes. These targets
 are acceptance criteria, not guarantees for arbitrary telemetry volumes.
 
-The executor compiles ordinary structured aggregates against raw
-telemetry. Its disposable read-cache version 4 stores completed-batch trace
-candidates and parts, not general minute aggregates. Service maps combine
+The executor uses analytical minute summaries for supported span/log aggregates,
+filters and dimensions; other shapes read raw telemetry. The disposable trace
+read cache stores completed-batch candidates and parts. Service maps combine
 analytical rollups with a raw client-span query for external peers. That query
 materializes the filtered client projection once for reuse by peer and edge
 aggregates; its child-span and observed-service checks also read spans. Health
 panels use analytical rollups. Rollup data has separate watermark lag and approximate latency
 semantics. Do not assume those rollups answer arbitrary raw counts,
 rates or quantiles exactly, or report every dashboard query as cached.
+
+`just readbench-check` compiles the opt-in native read harness in CI without
+running its large fixtures. Run the local executor microbenchmark explicitly:
+
+```sh
+rtk bash scripts/with-duckdb.sh go test ./internal/query -tags=readbench \
+  -run '^$' -bench '^BenchmarkPanelQueries24Hours$' -benchtime=100x -count=1 -v
+```
+
+Without the `readbench` build tag this selection runs no benchmarks. The default
+generated fixture is regression data, not capacity evidence. Representative
+replay uses `PITOT_PANEL_BENCH_DATA_DIR` and must pass format-5 verification.
+Executor measurements exclude browser paint and sustained external ingest;
+record result-cache policy and analytical warmup with their results.
+
+An opt-in mixed-load probe exercises the Executor while ingestion, analytical
+rollups, completed-batch caching, compaction and maintenance run concurrently:
+
+```sh
+rtk env PITOT_MIXED_READ=1 PITOT_MIXED_RATE=40 PITOT_MIXED_SCALE=4 \
+  PITOT_MIXED_SEED_STATE=settled \
+  bash scripts/with-duckdb.sh go test ./internal/query -tags=readbench \
+  -run '^TestMixedReadLoad$' -count=1 -timeout=3m -v
+```
+
+Use `PITOT_MIXED_SEED_STATE=backlog` to include initial compaction catch-up.
+Freeze `PITOT_MIXED_END` to the same in-retention UTC RFC3339 timestamp for paired
+runs. The default probe lasts 15 seconds; `PITOT_MIXED_DURATION` accepts up to
+five minutes. A 90-second run at 40 requests/sec offers 1,200 requests per kind,
+allowing p99 reporting when at least 1,000 complete successfully. These remain
+local synthetic measurements, not a sustained production capacity qualification.
+Its rate counts user requests, including multi-panel requests, whereas ingest
+rates count telemetry records. Report missed arrivals and backend refusals
+alongside latency; a completed probe does not by itself qualify RSS, debt or
+freshness. See [the read-performance investigation](proposals/0006-read-performance.md).
+
+The separate `filebench` experiment compares the complete bound trace-ranking
+query across candidate expressions and materialization policies:
+
+```sh
+rtk bash scripts/with-duckdb.sh go test ./internal/engine -tags=filebench \
+  -run '^TestTraceCandidateWindowPlanComparisonBenchmark$' -count=1 -v
+```
+
+It checks rankings against raw spans before collecting interleaved warm samples
+on one pinned file snapshot. Its timings exclude binding and user-interface work.
 
 The native tests exercise whole-window totals, bounded newest buckets
 and width-aware 24-hour bucket selection:

@@ -49,32 +49,11 @@ func (d *Duck) physicalSource(signal string, batches []telemetry.BatchMetadata) 
 	return "SELECT " + rawProjection(s) + " FROM read_parquet([" + strings.Join(files, ",") + "], union_by_name=false, hive_partitioning=false)"
 }
 
-// snapshotSource uses a glob when pruning saves little. The filename predicate
-// admits exactly the captured batches' files, including when ingest publishes a new file
-// or compaction renames an output in after metadata capture, or a retired
-// input is deleted. DuckDB prunes the other files by name without opening
-// them, but binds the schema from the first file listed, so the list starts
-// with the schema batch, which is never deleted while the process runs.
-// Narrow subsets keep explicit lists and footer pruning.
-func (d *Duck) snapshotSource(signal string, selected, active []telemetry.BatchMetadata) string {
-	count := 0
-	for _, b := range active {
-		_, n := batchTime(b, signal)
-		if n > 0 {
-			count++
-		}
-	}
-	if len(selected) < 64 || len(selected)*5 < count*4 {
-		return d.physicalSource(signal, selected)
-	}
-	paths := make([]string, 0, len(selected))
-	for _, b := range selected {
-		paths = append(paths, filepath.ToSlash(filepath.Join(d.repository.Parquet.BatchesDir(), b.ID+telemetry.BatchSuffix, signal+".parquet")))
-	}
-	s, _ := telemetry.LookupSignal(signal)
-	// Compare whole names: DuckDB prunes a glob by a filename predicate only
-	// when it can evaluate it per file, which a computed batch ID defeats.
-	return "SELECT " + rawProjection(s) + " FROM read_parquet(" + parquetGlob(d.repository.Parquet.Dir(), signal) + ", union_by_name=false, hive_partitioning=false) WHERE filename IN (" + idsSQL(paths) + ")"
+// snapshotSource enumerates the captured files even for broad selections.
+// A glob plus filename IN becomes expensive at larger file counts. The caller's
+// pin keeps these exact immutable paths available through row consumption.
+func (d *Duck) snapshotSource(signal string, selected, _ []telemetry.BatchMetadata) string {
+	return d.physicalSource(signal, selected)
 }
 
 func (d *Duck) batchIDColumn(signal, filename string) string {
@@ -87,7 +66,7 @@ func cleanSource(signal, physical string) string {
 	return cleanSelect(signal, "("+physical+")")
 }
 
-// parquetGlob lists one signal's files, schema batch first; see snapshotSource.
+// parquetGlob lists the schema batch first for stable view binding.
 func parquetGlob(parquetDir, signal string) string {
 	batches := filepath.Join(parquetDir, "batches")
 	return "[" + sqlLiteral(filepath.ToSlash(filepath.Join(batches, telemetry.SchemaBatch, signal+".parquet"))) + "," +
@@ -103,11 +82,20 @@ func (d *Duck) bindRollupSnapshot(ctx context.Context, tx *sql.Tx) (func() error
 	if d.repository == nil || d.repository.Parquet == nil {
 		return func() error { return nil }, nil
 	}
-	batches := d.repository.Parquet.BatchMetadata()
+	return d.bindRollupSnapshotFiles(ctx, tx, d.repository.Parquet.BatchMetadata(), nil)
+}
+
+// Discovery binds the full captured catalog. Reaggregation may narrow that
+// same catalog to its known event-time interval; the caller retains the pin
+// and transaction throughout both bindings. Each signal uses its own footer.
+func (d *Duck) bindRollupSnapshotFiles(ctx context.Context, tx *sql.Tx, batches []telemetry.BatchMetadata, window *queryrows.Window) (func() error, error) {
+	if d.repository == nil || d.repository.Parquet == nil {
+		return func() error { return nil }, nil
+	}
 	for _, s := range telemetry.Signals {
 		selected := make([]telemetry.BatchMetadata, 0, len(batches))
 		for _, b := range batches {
-			if _, n := b.Signal(s); n > 0 {
+			if _, n := b.Signal(s); n > 0 && (window == nil || overlapping(b, s.Name, *window)) {
 				selected = append(selected, b)
 			}
 		}

@@ -78,11 +78,16 @@ type cacheEntry struct {
 // nobody's abandoned work holds the engine. A background refresh has no
 // callers and runs to completion.
 type cacheFlight struct {
-	done    chan struct{}
-	stamp   time.Time
-	value   any
-	err     error
-	waiters int
+	done  chan struct{}
+	stamp time.Time
+	// Fixed-window computations may be registered well after their initiating
+	// caller arrived, following an older flight. Keep that freshness boundary
+	// separate from the original stamp used for window identity and TTL age.
+	registeredAt time.Time
+	fixedWindow  bool
+	value        any
+	err          error
+	waiters      int
 	// detached runs outlive their callers once started, that is once they
 	// hold a read slot. One still waiting in line when its last caller
 	// leaves is cancelled, so abandoned requests cannot fill the queue.
@@ -160,6 +165,12 @@ func keyOf(v any) (cacheKey, error) {
 // shared: callers must not mutate it. The outcome is one of the cache* lookup
 // results.
 func loadCached[T any](e *Executor, ctx context.Context, key cacheKey, stamp time.Time, fn flightFunc[T]) (T, string, error) {
+	return loadCachedForWindow(e, ctx, key, stamp, false, fn)
+}
+
+// Only callers with a clock-independent query window opt in. Relative windows
+// and other generic cached computations retain their original stamp semantics.
+func loadCachedForWindow[T any](e *Executor, ctx context.Context, key cacheKey, stamp time.Time, fixedWindow bool, fn flightFunc[T]) (T, string, error) {
 	var zero T
 	c := &e.cache
 	run := func(ctx context.Context) (any, int64, bool, error) { return fn(ctx) }
@@ -182,7 +193,7 @@ retry:
 			c.lru.MoveToFront(element)
 			// Never duplicate work already running or waiting for admission.
 			if c.flights[key] == nil {
-				e.startFlight(ctx, key, stamp, true, run)
+				e.startFlight(ctx, key, stamp, true, fixedWindow, run)
 			}
 			c.mu.Unlock()
 			metrics.QueryCacheRequests.WithLabelValues(cacheStale).Inc()
@@ -195,11 +206,11 @@ retry:
 	flight := c.flights[key]
 	if flight == nil {
 		outcome = cacheMiss
-		flight = e.startFlight(ctx, key, stamp, false, run)
+		flight = e.startFlight(ctx, key, stamp, false, fixedWindow, run)
 	}
 	// A bypass caller must wait for older work to finish before requesting
 	// a fresh run. Keep its place as a waiter without accepting that answer.
-	accept := e.joinable(flight, stamp, bypass)
+	accept := e.joinable(flight, stamp, bypass, fixedWindow)
 	flight.waiters++
 	// A caller that will read the stored result keeps the run going.
 	flight.detached = flight.detached || c.ttl > 0 && !bypass
@@ -232,8 +243,9 @@ retry:
 }
 
 type panelCacheLookup struct {
-	key cacheKey
-	id  string
+	key         cacheKey
+	id          string
+	fixedWindow bool
 }
 
 // availablePanels pins a whole refresh's existing answers or flights. It adds
@@ -265,7 +277,7 @@ func (e *Executor) availablePanels(ctx context.Context, lookups []panelCacheLook
 			}
 		}
 		flight := c.flights[lookup.key]
-		if flight == nil || !e.joinable(flight, stamp, bypass) {
+		if flight == nil || !e.joinable(flight, stamp, bypass, lookup.fixedWindow) {
 			c.mu.Unlock()
 			return nil, false, nil
 		}
@@ -316,16 +328,19 @@ func (e *Executor) availablePanels(ctx context.Context, lookups []panelCacheLook
 
 // joinable reports whether a caller may take flight's answer. Non-bypass
 // callers always share in-flight work; the TTL applies only to stored results.
-// A no-cache caller accepts only a run whose window ends at or after its
-// arrival. c.mu is held.
-func (e *Executor) joinable(flight *cacheFlight, stamp time.Time, bypass bool) bool {
-	return !bypass || !flight.stamp.Before(stamp)
+// A no-cache caller requires the original window stamp to reach its arrival.
+// For fixed windows, registration after arrival also proves freshness: the
+// window is identical and every read snapshot is acquired after registration.
+// c.mu is held.
+func (e *Executor) joinable(flight *cacheFlight, stamp time.Time, bypass, fixedWindow bool) bool {
+	return !bypass || !flight.stamp.Before(stamp) ||
+		fixedWindow && flight.fixedWindow && !flight.registeredAt.Before(stamp)
 }
 
 // startFlight registers the only run for key and stores its result under
 // stamp. c.mu is held and no run for key may be in flight. The run keeps the
 // caller's values but not its cancellation, and ends with the executor.
-func (e *Executor) startFlight(caller context.Context, key cacheKey, stamp time.Time, background bool, fn flightFunc[any]) *cacheFlight {
+func (e *Executor) startFlight(caller context.Context, key cacheKey, stamp time.Time, background, fixedWindow bool, fn flightFunc[any]) *cacheFlight {
 	releaseBatch := func() {}
 	if batch, ok := caller.Value(panelBatchKey{}).(*panelBatchAdmission); ok {
 		releaseBatch = batch.retainFlight()
@@ -333,6 +348,9 @@ func (e *Executor) startFlight(caller context.Context, key cacheKey, stamp time.
 	c := &e.cache
 	run, cancel := context.WithCancel(context.WithoutCancel(caller))
 	flight := &cacheFlight{done: make(chan struct{}), stamp: stamp, detached: background, background: background, cancel: cancel}
+	if fixedWindow {
+		flight.fixedWindow, flight.registeredAt = true, e.now()
+	}
 	run = context.WithValue(run, flightContextKey{}, flight)
 	c.flights[key] = flight
 	e.mu.Lock()

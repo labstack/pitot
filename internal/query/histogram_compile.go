@@ -47,7 +47,8 @@ func histogramAggregate(b *strings.Builder, prefix, from string, selects, aliase
 	aggregate := append(append([]string(nil), selects...), hidden...)
 	aggregate = append(aggregate, "count(*) AS __hist_rows")
 	fmt.Fprintf(b, ", %s_aggregate AS (SELECT %s FROM %s%s)", prefix, strings.Join(aggregate, ","), from, grouping(false))
-	fmt.Fprintf(b, ", %s_bins AS (SELECT %s,e.key AS __hist_k,sum(e.value)::DOUBLE AS __hist_n FROM %s,unnest(map_entries(hist)) entries(e)%s)", prefix, strings.Join(hidden, ","), from, grouping(true))
+	// Projection expansion avoids a correlated join over the complete map.
+	fmt.Fprintf(b, ", %s_bins AS (SELECT %s,e.key AS __hist_k,sum(e.value)::DOUBLE AS __hist_n FROM (SELECT *,unnest(map_entries(hist)) AS e FROM %s) __hist_entries%s)", prefix, strings.Join(hidden, ","), from, grouping(true))
 	partition := strings.Join(keys, ",")
 	fmt.Fprintf(b, ", %s_cdf AS (SELECT *,sum(__hist_n) OVER (PARTITION BY %s ORDER BY __hist_k) AS __hist_cum,sum(__hist_n) OVER (PARTITION BY %s) AS __hist_total FROM %s_bins)", prefix, partition, partition, prefix)
 	values := append([]string(nil), keys...)

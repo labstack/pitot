@@ -183,6 +183,10 @@ vet:
 lint:
     bash scripts/with-duckdb.sh golangci-lint run
 
+# Compile the opt-in read and file harnesses without heavyweight fixtures.
+readbench-check:
+    bash scripts/with-duckdb.sh go test -tags=readbench,filebench ./internal/query ./internal/engine -run '^$'
+
 test *ARGS='./...':
     bash scripts/with-duckdb.sh go test {{ARGS}}
 

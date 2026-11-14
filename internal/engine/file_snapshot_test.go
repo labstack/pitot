@@ -397,20 +397,19 @@ func TestReadCacheSemanticVersionRebuildsAllContributions(t *testing.T) {
 	}
 }
 
-func TestBroadGlobRetainsCapturedFileSet(t *testing.T) {
+func TestBroadSelectionRetainsCapturedFilesAcrossPublicationAndRetirement(t *testing.T) {
 	d, repo := newBatchCacheTest(t)
-	at := time.Now().UTC()
+	at := time.Now().UTC().Add(-time.Hour)
 	for i := range 64 {
-		if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: fmt.Sprintf("glob-%d", i), Spans: []telemetry.Span{{TraceID: "trace", SpanID: fmt.Sprint(i), StartUnixNanos: at.UnixNano(), IngestedAt: at.UnixNano()}}}); err != nil {
+		if err := commitRestoredFixture(repo, t.Context(), telemetrystore.Batch{ID: fmt.Sprintf("glob-%d", i), Spans: []telemetry.Span{{TraceID: "trace", SpanID: fmt.Sprint(i), StartUnixNanos: at.UnixNano(), IngestedAt: at.UnixNano()}}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	captured := repo.Parquet.BatchMetadata()
+	pin := d.pinParquet()
+	defer d.unpinParquet(pin)
 	source := d.snapshotSource("spans", captured, captured)
-	if !strings.Contains(source, "*.batch") {
-		t.Fatal("broad selection did not use glob")
-	}
-	if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: "new-after-capture", Spans: []telemetry.Span{{TraceID: "new", StartUnixNanos: at.UnixNano(), IngestedAt: at.UnixNano()}}}); err != nil {
+	if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: "new-after-capture", Spans: []telemetry.Span{{TraceID: "new", StartUnixNanos: at.UnixNano(), IngestedAt: at.Add(time.Hour).UnixNano()}}}); err != nil {
 		t.Fatal(err)
 	}
 	var count int
@@ -423,6 +422,29 @@ func TestBroadGlobRetainsCapturedFileSet(t *testing.T) {
 	}
 	if err := d.DB.QueryRow("SELECT count(*) FROM (" + narrow + ")").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("narrow rows=%d: %v", count, err)
+	}
+	current := func(want int) {
+		t.Helper()
+		if err := d.QueryRowScan(t.Context(), []any{&count}, "SELECT count(*) FROM spans"); err != nil || count != want {
+			t.Fatalf("current rows=%d want=%d: %v", count, want, err)
+		}
+	}
+	current(65)
+	if merged, err := repo.CompactParquet(t.Context(), d, 64); err != nil || merged < 2 {
+		t.Fatalf("compact captured inputs=%d: %v", merged, err)
+	}
+	current(65)
+	if err := d.DB.QueryRow("SELECT count(*) FROM (" + source + ")").Scan(&count); err != nil || count != 64 {
+		t.Fatalf("pinned captured rows after compaction=%d: %v", count, err)
+	}
+	// Include the newly published batch's actual ingestion stamp as well as
+	// the restored inputs, so the live catalog is completely retired.
+	if _, err := repo.PruneParquetPass(t.Context(), d, time.Now().Add(time.Minute).UnixNano(), 128, time.Minute); err != nil {
+		t.Fatal("prune captured inputs:", err)
+	}
+	current(0)
+	if err := d.DB.QueryRow("SELECT count(*) FROM (" + source + ")").Scan(&count); err != nil || count != 64 {
+		t.Fatalf("pinned captured rows after retention=%d: %v", count, err)
 	}
 }
 

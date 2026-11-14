@@ -29,19 +29,23 @@ CREATE TABLE IF NOT EXISTS service_rollup (
 // spanHistogramZero is outside the index range of positive finite durations.
 const spanHistogramZero = -2147483648
 
+// These three scan-oriented summaries intentionally have no ART primary key.
+// refreshServiceRollup serializes complete affected-scope replacement in one
+// transaction, and each INSERT groups by the complete logical key. Keep every
+// key column NOT NULL. A compound ART cannot accelerate these scans, but the
+// pinned engine probes it under a vacuum lock that waits on full checkpoints.
 const createSpanRollupTable = `
 CREATE TABLE IF NOT EXISTS span_rollup (
-  namespace TEXT,
-  bucket TIMESTAMP_NS,
-  service TEXT,
-  kind TEXT,
-  status TEXT,
+  namespace TEXT NOT NULL,
+  bucket TIMESTAMP_NS NOT NULL,
+  service TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
   spans BIGINT,
   duration_sum DOUBLE,
   duration_min DOUBLE,
   duration_max DOUBLE,
-  hist MAP(INTEGER, UBIGINT),
-  PRIMARY KEY (namespace, bucket, service, kind, status)
+  hist MAP(INTEGER, UBIGINT)
 );`
 
 // Endpoint summaries retain at most 128 routes per service-minute plus one
@@ -50,16 +54,15 @@ const endpointRouteLimit = 128
 
 const createEndpointRollupTable = `
 CREATE TABLE IF NOT EXISTS endpoint_rollup (
- namespace TEXT, bucket TIMESTAMP_NS, service TEXT, kind TEXT, status TEXT,
- route TEXT, overflow BOOLEAN, spans BIGINT, duration_sum DOUBLE,
- duration_min DOUBLE, duration_max DOUBLE, hist MAP(INTEGER, UBIGINT),
- PRIMARY KEY (namespace,bucket,service,kind,status,route,overflow)
+ namespace TEXT NOT NULL, bucket TIMESTAMP_NS NOT NULL, service TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL,
+ route TEXT NOT NULL, overflow BOOLEAN NOT NULL, spans BIGINT, duration_sum DOUBLE,
+ duration_min DOUBLE, duration_max DOUBLE, hist MAP(INTEGER, UBIGINT)
 );`
 
 const createLogRollupTable = `
 CREATE TABLE IF NOT EXISTS log_rollup (
- namespace TEXT, bucket TIMESTAMP_NS, service TEXT, severity TEXT,
- logs BIGINT, PRIMARY KEY(namespace,bucket,service,severity)
+ namespace TEXT NOT NULL, bucket TIMESTAMP_NS NOT NULL, service TEXT NOT NULL, severity TEXT NOT NULL,
+ logs BIGINT
 );`
 
 const createEdgeRollupTable = `

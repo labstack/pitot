@@ -77,7 +77,7 @@ func TestMetricReplayCopyPreservesSourceAndStartTime(t *testing.T) {
 	}
 	// All derived Parquet stays under the engine's configured query directory.
 	raw := filepath.Join(cfg.QueryDir(), "shifted.parquet")
-	metadata := telemetry.BatchMetadata{Version: 4, ID: "shifted"}
+	metadata := telemetry.BatchMetadata{Version: panelBenchFormat, ID: "shifted"}
 	if err := tilePanelParquet(filepath.Join(input, "parquet", "batches", "metric.batch", "metrics.parquet"), raw, "metrics", "", fixtureStart, fixtureStart.Add(time.Minute), time.Hour, &metadata, map[string]bool{}, map[string]bool{}); err != nil {
 		t.Fatal("cannot shift private metric fixture")
 	}
@@ -116,12 +116,28 @@ func BenchmarkPanelQueries24Hours(b *testing.B) {
 		data = preparePanelRegression(b)
 	}
 	engine, cfg := panelBenchEngine(b, data)
+	metadata, err := panelReplayMetadata(cfg.TelemetryDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	horizon := metadata[0].MaxIngestedNanos
+	for _, m := range metadata {
+		horizon = max(horizon, m.MaxIngestedNanos)
+	}
+	panelBenchWarmDashboard(b, engine, horizon)
+	var rolledSpans, rolledLogs int64
+	if err := engine.DB.QueryRowContext(b.Context(), "SELECT coalesce(sum(spans),0),coalesce(sum(log_count),0) FROM service_rollup").Scan(&rolledSpans, &rolledLogs); err != nil {
+		b.Fatal(err)
+	}
+	if rolledSpans != data.Spans || rolledLogs != data.Logs {
+		b.Fatalf("unprepared analytical summaries: spans=%d/%d logs=%d/%d", rolledSpans, data.Spans, rolledLogs, data.Logs)
+	}
 	var version, memory string
 	var threads int
 	if err := engine.DB.QueryRowContext(b.Context(), "SELECT version(),current_setting('memory_limit'),current_setting('threads')").Scan(&version, &memory, &threads); err != nil {
 		b.Fatal(err)
 	}
-	b.Logf("representative=%t platform=%s/%s engine=%s resolved_memory=%s configured_threads=%d effective_threads=%d connections=%d executor_parallel=4", input != "", runtime.GOOS, runtime.GOARCH, version, memory, cfg.DuckDBThreads, threads, cfg.DuckDBMaxConns)
+	b.Logf("representative=%t platform=%s/%s engine=%s resolved_memory=%s configured_threads=%d effective_threads=%d connections=%d executor_parallel=4 result_cache_ttl=0 analytical_summaries=warm", input != "", runtime.GOOS, runtime.GOARCH, version, memory, cfg.DuckDBThreads, threads, cfg.DuckDBMaxConns)
 	raw, err := json.Marshal(data)
 	if err != nil {
 		b.Fatal(err)
@@ -211,6 +227,8 @@ func panelBenchmarkMetricShapes(tb testing.TB, names map[string]string) []Panel 
 func measurePanelBenchmark(b *testing.B, engine Engine, spec Dashboard, end time.Time) float64 {
 	b.StopTimer()
 	e := NewExecutor(engine, 30)
+	e.SetCacheTTL(0) // Measure executor/engine work on each sample.
+	b.Cleanup(e.Close)
 	e.now = func() time.Time { return end }
 	run := func() {
 		results, err := e.Run(b.Context(), RunRequest{Dashboard: spec})
@@ -320,7 +338,7 @@ func TestPanelBenchmarkReplayTilesSignedTimesAndDistinctIdentities(t *testing.T)
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	m := telemetry.BatchMetadata{Version: 4, ID: "signed"}
+	m := telemetry.BatchMetadata{Version: panelBenchFormat, ID: "signed"}
 	for _, signal := range []string{"spans", "logs", "metrics"} {
 		err := tilePanelParquet(filepath.Join(seed, "parquet", "batches", "signed.batch", signal+".parquet"), filepath.Join(dst, signal+".parquet"), signal, "source_", start, start.Add(time.Hour), -3*time.Hour, &m, map[string]bool{}, map[string]bool{})
 		if err != nil {
