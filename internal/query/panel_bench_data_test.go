@@ -3,7 +3,9 @@
 package query
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -13,19 +15,24 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/labstack/pitot/internal/config"
+	native "github.com/labstack/pitot/internal/duckdb"
 	"github.com/labstack/pitot/internal/engine"
 	"github.com/labstack/pitot/internal/queryrows"
 	"github.com/labstack/pitot/internal/telemetry"
+	"github.com/labstack/pitot/internal/telemetry/semconv"
 	telemetrystore "github.com/labstack/pitot/internal/telemetry/store"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
 	"github.com/zeebo/xxh3"
 )
+
+const panelBenchFormat = 5
 
 type panelBenchData struct {
 	Dir                                string `json:"-"`
@@ -75,6 +82,13 @@ func panelBenchmarkMetricNames(tb testing.TB, engine Engine, data panelBenchData
 // Do not open the controller's repository: Open can clean staging and rewrite
 // its schema batch. Validate every metadata record before copying anything.
 func panelReplayMetadata(input string) ([]telemetry.BatchMetadata, error) {
+	// A live compaction transaction can depend on staging outside published batches.
+	// Require a quiescent capture; committed retirement sidecars are copied below.
+	if _, err := os.Lstat(filepath.Join(input, "COMPACTION.json")); err == nil {
+		return nil, errors.New("replay needs a quiescent capture without a live COMPACTION.json marker")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	entries, err := os.ReadDir(filepath.Join(input, "parquet", "batches"))
 	if err != nil {
 		return nil, err
@@ -95,7 +109,7 @@ func panelReplayMetadata(input string) ([]telemetry.BatchMetadata, error) {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			return nil, err
 		}
-		if m.Version != 4 {
+		if m.Version != panelBenchFormat {
 			return nil, fmt.Errorf("%w: version %d", telemetry.ErrUnsupportedBatchFormat, m.Version)
 		}
 		if err := telemetry.ValidateBatchID(m.ID); err != nil {
@@ -112,6 +126,19 @@ func panelReplayMetadata(input string) ([]telemetry.BatchMetadata, error) {
 	return out, nil
 }
 
+// Preserve committed catalog state when copying a captured batch.
+func panelReplaySidecars(tb testing.TB, input, id string, names []string) []string {
+	tb.Helper()
+	for _, name := range []string{"replaces.json", "pruned"} {
+		if _, err := os.Lstat(filepath.Join(input, "parquet", "batches", id+telemetry.BatchSuffix, name)); err == nil {
+			names = append(names, name)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			tb.Fatal(err)
+		}
+	}
+	return names
+}
+
 // Copy accepted batches byte for byte before opening a repository. Like the
 // replay harness, input is the telemetry root containing parquet/batches.
 // Opening only the private copy leaves source schema and staging untouched.
@@ -119,9 +146,18 @@ func copyMetricCrosscheckData(tb testing.TB, input string) panelBenchData {
 	tb.Helper()
 	metadata, err := panelReplayMetadata(input)
 	if err != nil {
-		tb.Fatal("cross-check input needs valid format-5 batch metadata")
+		tb.Fatal("cross-check input:", err)
 	}
 	data := panelBenchData{Dir: filepath.Join(panelBenchScratch(tb), "state")}
+	verifier, err := telemetry.NewBatchVerifier(tb.Context(), filepath.Dir(data.Dir))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	defer func() {
+		if err := verifier.Close(); err != nil {
+			tb.Error(err)
+		}
+	}()
 	for _, m := range metadata {
 		names := []string{"metadata.json"}
 		if m.Spans > 0 {
@@ -133,6 +169,7 @@ func copyMetricCrosscheckData(tb testing.TB, input string) panelBenchData {
 		if m.Metrics > 0 {
 			names = append(names, "metrics.parquet")
 		}
+		names = panelReplaySidecars(tb, input, m.ID, names)
 		dst := filepath.Join(data.Dir, "telemetry", "parquet", "batches", m.ID+telemetry.BatchSuffix)
 		if err := os.MkdirAll(dst, 0o755); err != nil {
 			tb.Fatal("cannot create cross-check batch directory")
@@ -157,9 +194,9 @@ func copyMetricCrosscheckData(tb testing.TB, input string) panelBenchData {
 				tb.Fatal("cannot copy cross-check input")
 			}
 		}
-		data.Spans += int64(m.Spans)
-		data.Logs += int64(m.Logs)
-		data.Metrics += int64(m.Metrics)
+		if err := verifier.Validate(tb.Context(), dst); err != nil {
+			tb.Fatal("invalid cross-check batch:", err)
+		}
 	}
 	// Repository metadata derives each signal's bounds from its event footer.
 	repo, err := telemetrystore.Open(filepath.Join(data.Dir, "telemetry"))
@@ -168,6 +205,9 @@ func copyMetricCrosscheckData(tb testing.TB, input string) panelBenchData {
 	}
 	low, high := int64(math.MaxInt64), int64(math.MinInt64)
 	for _, m := range repo.Parquet.BatchMetadata() {
+		data.Spans += int64(m.Spans)
+		data.Logs += int64(m.Logs)
+		data.Metrics += int64(m.Metrics)
 		if m.Metrics > 0 && m.MetricTime.Known {
 			low = min(low, m.MetricTime.MinNanos)
 			high = max(high, m.MetricTime.MaxNanos)
@@ -228,6 +268,15 @@ func preparePanelReplay(tb testing.TB, input string, volume int) panelBenchData 
 		tb.Fatal("invalid replay volume")
 	}
 	root := panelBenchScratch(tb)
+	verifier, err := telemetry.NewBatchVerifier(tb.Context(), root)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	defer func() {
+		if err := verifier.Close(); err != nil {
+			tb.Error(err)
+		}
+	}()
 	copied := filepath.Join(root, "input")
 	hash := sha256.New()
 	for _, m := range metadata {
@@ -241,6 +290,7 @@ func preparePanelReplay(tb testing.TB, input string, volume int) panelBenchData 
 		if m.Metrics > 0 {
 			files = append(files, "metrics.parquet")
 		}
+		files = panelReplaySidecars(tb, input, m.ID, files)
 		for _, name := range files {
 			rel := filepath.Join("parquet", "batches", m.ID+telemetry.BatchSuffix, name)
 			if err := os.MkdirAll(filepath.Dir(filepath.Join(copied, rel)), 0o755); err != nil {
@@ -267,11 +317,17 @@ func preparePanelReplay(tb testing.TB, input string, volume int) panelBenchData 
 			}
 		}
 	}
+	for _, m := range metadata {
+		if err := verifier.Validate(tb.Context(), filepath.Join(copied, "parquet", "batches", m.ID+telemetry.BatchSuffix)); err != nil {
+			tb.Fatal("invalid replay batch:", err)
+		}
+	}
 	repo, err := telemetrystore.Open(copied)
 	if err != nil {
 		tb.Fatal(err)
 	}
 	defer repo.Close()
+	metadata = repo.Parquet.BatchMetadata()
 	low, high := int64(math.MaxInt64), int64(math.MinInt64)
 	for _, m := range repo.Parquet.BatchMetadata() {
 		for _, r := range []telemetry.TimeRange{m.SpanTime, m.LogTime, m.MetricTime} {
@@ -301,7 +357,7 @@ func preparePanelReplay(tb testing.TB, input string, volume int) panelBenchData 
 				if err := os.MkdirAll(dst, 0o755); err != nil {
 					tb.Fatal(err)
 				}
-				next := telemetry.BatchMetadata{Version: 4, ID: prefix + m.ID, Generation: m.Generation}
+				next := telemetry.BatchMetadata{Version: panelBenchFormat, ID: prefix + m.ID, Generation: m.Generation}
 				for _, signal := range []string{"spans", "logs", "metrics"} {
 					count := map[string]int{"spans": m.Spans, "logs": m.Logs, "metrics": m.Metrics}[signal]
 					if count == 0 {
@@ -336,6 +392,9 @@ func preparePanelReplay(tb testing.TB, input string, volume int) panelBenchData 
 				}
 				if err := os.WriteFile(filepath.Join(dst, "metadata.json"), raw, 0o644); err != nil {
 					tb.Fatal(err)
+				}
+				if err := verifier.Validate(tb.Context(), dst); err != nil {
+					tb.Fatal("invalid tiled batch:", err)
 				}
 				data.Spans += int64(next.Spans)
 				data.Logs += int64(next.Logs)
@@ -407,10 +466,27 @@ func tilePanelParquet(input, output, signal, prefix string, start, end time.Time
 			timeColumns[column] = name
 		}
 	}
+	// Repeated native timestamps and linked identities follow the replay tile too.
+	for i, path := range reader.Schema().Columns() {
+		switch path[0] {
+		case "event_times", "exemplar_times":
+			timeColumns[i] = path[0]
+		}
+	}
 	identityColumns := map[int]bool{}
 	for _, name := range []string{"trace_id", "span_id", "parent_span_id"} {
 		if column, ok := cols[name]; ok {
 			identityColumns[column] = true
+		}
+	}
+	spillCounts, err := panelReplaySpills(input, reader.File(), signal, start, end)
+	if err != nil {
+		return err
+	}
+	for i, path := range reader.Schema().Columns() {
+		switch path[0] {
+		case "link_trace_ids", "link_span_ids", "exemplar_trace_ids", "exemplar_span_ids":
+			identityColumns[i] = true
 		}
 	}
 	out, err := os.Create(output)
@@ -422,6 +498,7 @@ func tilePanelParquet(input, output, signal, prefix string, start, end time.Time
 	type rowWriter interface {
 		WriteRows([]parquet.Row) (int, error)
 		Close() error
+		SetKeyValueMetadata(string, string)
 	}
 	var writer rowWriter
 	if signal == "spans" {
@@ -429,6 +506,9 @@ func tilePanelParquet(input, output, signal, prefix string, start, end time.Time
 		writer = parquet.NewSortingWriter[any](out, 8192, options...)
 	} else {
 		writer = parquet.NewGenericWriter[any](out, options...)
+	}
+	for key, count := range spillCounts {
+		writer.SetKeyValueMetadata(key, strconv.FormatUint(count, 10))
 	}
 	defer func() { err = errors.Join(err, writer.Close()) }()
 	rows := make([]parquet.Row, 256)
@@ -454,11 +534,12 @@ func tilePanelParquet(input, output, signal, prefix string, start, end time.Time
 					v := value.Int64()
 					// Zero optional raw timestamps remain absent; native event
 					// timestamps, including signed and zero instants, are shifted.
-					if v != 0 || name == event || name == "end_time" || name == "start_time" {
+					optional := name == "time_unix_nano" || name == "observed_time_unix_nano" || name == "start_time_unix_nano"
+					if v != 0 || !optional {
 						row[i] = parquet.Int64Value(v+int64(shift)).Level(value.RepetitionLevel(), value.DefinitionLevel(), column)
 					}
 				}
-				if identityColumns[column] && value.String() != "" {
+				if identityColumns[column] && !value.IsNull() && value.String() != "" {
 					row[i] = parquet.ByteArrayValue([]byte(prefix+value.String())).Level(value.RepetitionLevel(), value.DefinitionLevel(), column)
 				}
 			}
@@ -496,6 +577,59 @@ func tilePanelParquet(input, output, signal, prefix string, start, end time.Time
 		}
 	}
 	return nil
+}
+
+// Attribute maps and their dedicated values are unchanged by replay. After native
+// input verification, a non-null map value with a NULL dedicated column is exactly
+// a spill. Count only retained rows; copying the source footer overcounts clips.
+func panelReplaySpills(input string, file parquet.FileView, signal string, start, end time.Time) (counts map[string]uint64, err error) {
+	layout, ok := telemetry.LookupSignal(signal)
+	if !ok {
+		return nil, fmt.Errorf("unknown replay signal %q", signal)
+	}
+	counts = map[string]uint64{}
+	var db *sql.DB
+	defer func() {
+		if db != nil {
+			err = errors.Join(err, db.Close())
+		}
+	}()
+	for _, key := range layout.Keys() {
+		footer := "pitot.spill." + key.Name
+		if _, exists := file.Lookup(footer); !exists {
+			continue
+		}
+		if db == nil {
+			db, err = sql.Open("duckdb", "?threads=2&memory_limit=256MB")
+			if err != nil {
+				return nil, err
+			}
+			db.SetMaxOpenConns(1)
+			for _, statement := range []string{"SET TimeZone='UTC'", "SET temp_directory=''"} {
+				if _, err = db.Exec(statement); err != nil {
+					return nil, err
+				}
+			}
+			if err = native.ConfigurePolicy(context.Background(), db, filepath.Dir(input)); err != nil {
+				return nil, err
+			}
+		}
+		source := "attributes"
+		if key.Scope == semconv.Resource {
+			source = "resource"
+		}
+		var count uint64
+		// database/sql binds time.Time at microsecond precision. Text parameters
+		// cast to TIMESTAMP_NS retain the exact clipping bounds.
+		query := fmt.Sprintf("SELECT count(*) FROM read_parquet(?, hive_partitioning=false, union_by_name=false) WHERE %s >= ?::TIMESTAMP_NS::TIMESTAMPTZ_NS AND %s < ?::TIMESTAMP_NS::TIMESTAMPTZ_NS AND %s IS NULL AND variant_type(variant_normalize(%s), ?) <> 'VARIANT_NULL'", layout.Time, layout.Time, key.Column, source)
+		if err = db.QueryRow(query, input, start.UTC().Format("2006-01-02 15:04:05.999999999"), end.UTC().Format("2006-01-02 15:04:05.999999999"), key.Name).Scan(&count); err != nil {
+			return nil, err
+		}
+		if count > 0 {
+			counts[footer] = count
+		}
+	}
+	return counts, nil
 }
 
 func panelRowValue(row parquet.Row, column int) parquet.Value {
@@ -572,6 +706,34 @@ func panelTraceIndex(dir string) (err error) {
 	binary.LittleEndian.PutUint64(header[8:], entries)
 	_, err = out.WriteAt(header[:], 0)
 	return err
+}
+
+// The executor selects analytical rollups for eligible panels. Populate those
+// summaries before steady-state measurement rather than timing empty relations.
+func panelBenchWarmDashboard(tb testing.TB, d *engine.Duck, horizon int64) {
+	tb.Helper()
+	ctx, cancel := context.WithTimeout(tb.Context(), 5*time.Minute)
+	defer cancel()
+	var previous time.Time
+	for {
+		if err := ctx.Err(); err != nil {
+			tb.Fatal("dashboard rollup preparation:", err)
+		}
+		if _, err := d.RefreshDashboardRollups(ctx); err != nil {
+			tb.Fatal("dashboard rollup preparation:", err)
+		}
+		stamp, err := d.RollupWatermark(ctx)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		if !stamp.IsZero() && stamp.UnixNano() >= horizon {
+			return
+		}
+		if stamp.IsZero() || !previous.IsZero() && !stamp.After(previous) {
+			tb.Fatalf("dashboard rollup preparation made no progress: watermark=%s target=%d", stamp, horizon)
+		}
+		previous = stamp
+	}
 }
 
 func panelBenchEngine(tb testing.TB, data panelBenchData) (*engine.Duck, config.Config) {

@@ -37,5 +37,6 @@ Earlier proposals predate the template and keep their original structure.
 | 0003 | [Milestone 5: correct metrics and the system page](0003-agent-dashboards-m5.md) | Implemented |
 | 0004 | [Full UI without an LLM key, and PitotQL](0004-pitotql.md) | Accepted |
 | 0005 | [Dedicated attribute columns and batch format 5](0005-dedicated-attribute-columns.md) | Accepted |
+| 0006 | [Read performance under sustained ingest](0006-read-performance.md) | Draft |
 
 Settled decisions that a proposal leads to are recorded in [../adr](../adr/README.md).
