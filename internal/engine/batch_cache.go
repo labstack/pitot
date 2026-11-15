@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -193,7 +194,8 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 	if err := d.applyCacheTransfers(ctx); err != nil {
 		return 0, true, err
 	}
-	batches := d.repository.Parquet.BatchMetadata()
+	// BatchMetadata returns a shared, read-only snapshot; clone it before sorting.
+	batches := slices.Clone(d.repository.Parquet.BatchMetadata())
 	markers, err := batchMarkers(ctx, d.writer())
 	if err != nil {
 		return 0, false, err

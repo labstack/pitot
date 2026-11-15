@@ -408,7 +408,63 @@ func TestEdgeRollupKeysMatchConstantList(t *testing.T) {
 	}
 }
 
-// Unchunked reference for differential tests of the bounded implementation.
+// Unchunked, full-scan reference for differential tests of the bounded
+// implementation. span_agg comes from one bounded span scan; log_agg and
+// metric_agg scan logs and metrics directly over the same event-time range.
+// Production insertServiceRollup instead materializes all three per
+// affected-key chunk; these tests pin that both produce identical rows.
 func serviceRollupInsertSQL(keys string) string {
-	return serviceRollupSpanSQL(keys) + serviceRollupJoinSQL
+	return serviceRollupSpanSQL(keys) + serviceRollupReferenceJoinSQL
 }
+
+const serviceRollupReferenceJoinSQL = `,
+log_agg AS (
+  SELECT
+    l.namespace,
+    date_trunc('minute', l.time::TIMESTAMP_NS) AS bucket,
+    l.service,
+    COUNT(*) AS log_count
+  FROM logs l
+  WHERE l.time >= ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
+    AND l.time < ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
+  GROUP BY l.namespace, date_trunc('minute', l.time::TIMESTAMP_NS), l.service
+),
+metric_agg AS (
+  SELECT
+    m.namespace,
+    date_trunc('minute', m.time::TIMESTAMP_NS) AS bucket,
+    m.service,
+    COUNT(DISTINCT m.name) AS metric_count
+  FROM metrics m
+  WHERE m.time >= ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
+    AND m.time < ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
+  GROUP BY m.namespace, date_trunc('minute', m.time::TIMESTAMP_NS), m.service
+)
+INSERT INTO service_rollup (
+  namespace,
+  bucket,
+  service,
+  spans,
+  served_spans,
+  p50_ms,
+  p95_ms,
+  error_rate,
+  log_count,
+  metric_count
+)
+SELECT
+  a.namespace,
+  a.bucket,
+  a.service,
+  COALESCE(s.spans, 0),
+  COALESCE(s.served_spans, 0),
+  COALESCE(s.p50_ms, 0),
+  COALESCE(s.p95_ms, 0),
+  COALESCE(s.error_rate, 0),
+  COALESCE(l.log_count, 0),
+  COALESCE(m.metric_count, 0)
+FROM service_pass_affected a
+LEFT JOIN span_agg s USING (namespace, bucket, service)
+LEFT JOIN log_agg l USING (namespace, bucket, service)
+LEFT JOIN metric_agg m USING (namespace, bucket, service)
+WHERE a.service != '';`

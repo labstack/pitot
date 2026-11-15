@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,7 +155,9 @@ func TestResourceInventorySignalSpecificUnknownBoundsAndPruning(t *testing.T) {
 	}
 	w := queryrows.Window{Start: at, End: time.Unix(0, 120)}
 	assertInventoryOracle(t, d, w, 3)
-	batches := repo.Parquet.BatchMetadata()
+	// BatchMetadata returns a shared, read-only snapshot; clone before mutating
+	// SpanTime below so the mutation stays local to this test.
+	batches := slices.Clone(repo.Parquet.BatchMetadata())
 	source := d.resourceInventorySource(batches, map[string]bool{"mixed": true}, w)
 	if strings.Contains(source, "spans.parquet") || !strings.Contains(source, "logs.parquet") || strings.Contains(source, "metrics.parquet") {
 		t.Fatal(source)

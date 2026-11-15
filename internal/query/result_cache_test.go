@@ -627,6 +627,49 @@ func TestResultCacheKeepsCancelledFlightUntilItExits(t *testing.T) {
 	}
 }
 
+// A non-bypass caller that arrives while a cancelled flight is still
+// registered must not adopt it: the cancelled run ends in context.Canceled,
+// which would surface as a failed panel for a live caller. The newcomer waits
+// for the dead run to clear and then runs its own, getting a real answer.
+func TestResultCacheRejectsCancelledFlight(t *testing.T) {
+	e, _, _ := cachedExecutor(t)
+	key := cacheKey{47}
+	gone, leave := context.WithCancel(t.Context())
+	release := make(chan struct{})
+	cancelled := make(chan struct{})
+	left := make(chan struct{})
+	go func() {
+		_, _, _ = loadCached(e, gone, key, e.now(), func(run context.Context) (int, int64, bool, error) {
+			<-run.Done()
+			close(cancelled)
+			<-release // slow to honor cancellation
+			return 0, 0, false, run.Err()
+		})
+		close(left)
+	}()
+	waitForFlight(t, e, key)
+	leave() // the lone caller leaves, cancelling the flight
+	<-left
+	<-cancelled // the flight is cancelled but still registered
+	result := make(chan error, 1)
+	var calls atomic.Int64
+	go func() {
+		_, _, err := loadCached(e, t.Context(), key, e.now(), func(context.Context) (int, int64, bool, error) {
+			calls.Add(1)
+			return 1, 8, true, nil
+		})
+		result <- err
+	}()
+	waitForWaiters(t, e, key, 1)
+	close(release) // the cancelled run returns context.Canceled
+	if err := <-result; err != nil {
+		t.Fatalf("a live caller adopted a cancelled flight: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("the newcomer did not run its own query: calls=%d", calls.Load())
+	}
+}
+
 // A run nobody will read later, because the cache is off or only no-cache
 // callers wait for it, is cancelled once its last caller leaves, and not
 // stored.

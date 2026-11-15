@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -142,7 +143,8 @@ func (d *Duck) refreshVersionRollup(ctx context.Context, waitBudget time.Duratio
 	if err != nil {
 		return 0, false, err
 	}
-	batches := d.repository.Parquet.BatchMetadata()
+	// BatchMetadata returns a shared, read-only snapshot; clone it before sorting.
+	batches := slices.Clone(d.repository.Parquet.BatchMetadata())
 	// Compaction generations must not put old unprocessed outputs behind new ingest.
 	sort.Slice(batches, func(i, j int) bool {
 		if batches[i].MinIngestedNanos != batches[j].MinIngestedNanos {
