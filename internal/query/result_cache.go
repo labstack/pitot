@@ -97,6 +97,10 @@ type cacheFlight struct {
 	background bool
 	started    atomic.Bool
 	cancel     context.CancelFunc
+	// cancelled records that this flight's last caller left and its run was
+	// cancelled. It stays registered until its function returns, but a new
+	// caller must not join a run that will end in context.Canceled.
+	cancelled bool
 }
 
 type flightContextKey struct{}
@@ -234,6 +238,7 @@ retry:
 		c.mu.Lock()
 		flight.waiters--
 		if flight.waiters == 0 && (!flight.detached || !flight.started.Load() && !flight.background) {
+			flight.cancelled = true
 			flight.cancel()
 			// Retain the flight until fn exits, even if cancellation is slow.
 		}
@@ -301,6 +306,7 @@ func (e *Executor) availablePanels(ctx context.Context, lookups []panelCacheLook
 			}
 			flight.waiters--
 			if flight.waiters == 0 && (!flight.detached || !flight.started.Load() && !flight.background) {
+				flight.cancelled = true
 				flight.cancel()
 			}
 		}
@@ -333,6 +339,11 @@ func (e *Executor) availablePanels(ctx context.Context, lookups []panelCacheLook
 // window is identical and every read snapshot is acquired after registration.
 // c.mu is held.
 func (e *Executor) joinable(flight *cacheFlight, stamp time.Time, bypass, fixedWindow bool) bool {
+	// A cancelled flight will end in context.Canceled; a new caller waits for
+	// it to clear and runs its own instead of adopting a dead run.
+	if flight.cancelled {
+		return false
+	}
 	return !bypass || !flight.stamp.Before(stamp) ||
 		fixedWindow && flight.fixedWindow && !flight.registeredAt.Before(stamp)
 }
