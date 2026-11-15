@@ -1613,24 +1613,31 @@ WHERE bucket >= ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
 // Aggregate each bounded signal scan before the final affected-bucket joins.
 // Schema-first Parquet scans can have a zero cardinality estimate in DuckDB 2;
 // joining raw events to the affected table can then build a hash table of every
-// event. Logs and metrics aggregate before joining. Spans must be filtered to
-// the affected keys first: each unaffected service-minute otherwise allocates
-// its own t-digest states. A semi-join against service_pass_affected reverses
-// into a build of every raw span, so the keys are bound as constants instead.
+// event. Spans, logs and metrics are all filtered to the affected keys first,
+// bound as a constant list rather than a semi-join against
+// service_pass_affected, which reverses into a build of every raw event. A late
+// or clock-skewed event pulls the event-time hull back by days; without the key
+// filter the log and metric aggregates then scanned and grouped every
+// service-minute of that whole hull, blowing memory and freezing the watermark.
+// For spans each unaffected service-minute otherwise also allocates its own
+// t-digest states. The final join only reads the materialized aggregates.
 func insertServiceRollup(ctx context.Context, tx rollupSQL, lo, hi time.Time) (sql.Result, error) {
-	// Materialize only bounded span aggregates. Logs, metrics and the final
-	// affected-key join run once, preserving empty and NULL-key output rows.
-	_, err := tx.ExecContext(ctx, `CREATE OR REPLACE TEMP TABLE service_pass_spans (
+	for _, create := range []string{
+		`CREATE OR REPLACE TEMP TABLE service_pass_spans (
  namespace VARCHAR, bucket TIMESTAMP_NS, service VARCHAR, spans BIGINT, served_spans BIGINT,
- p50_ms DOUBLE, p95_ms DOUBLE, error_rate DOUBLE)`)
-	if err != nil {
-		return nil, err
+ p50_ms DOUBLE, p95_ms DOUBLE, error_rate DOUBLE)`,
+		`CREATE OR REPLACE TEMP TABLE service_pass_logs (
+ namespace VARCHAR, bucket TIMESTAMP_NS, service VARCHAR, log_count BIGINT)`,
+		`CREATE OR REPLACE TEMP TABLE service_pass_metrics (
+ namespace VARCHAR, bucket TIMESTAMP_NS, service VARCHAR, metric_count BIGINT)`,
+	} {
+		if _, err := tx.ExecContext(ctx, create); err != nil {
+			return nil, err
+		}
 	}
-	err = forAffectedKeys(ctx, tx,
-		`SELECT DISTINCT namespace, epoch_ns(bucket), service FROM service_pass_affected
- WHERE namespace IS NOT NULL AND bucket IS NOT NULL AND service IS NOT NULL`, nil,
+	err := forAffectedKeys(ctx, tx, serviceRollupAffectedKeysSQL, nil,
 		`struct_pack(namespace := s.namespace, bucket := date_trunc('minute', s.start_time::TIMESTAMP_NS), service := s.service)`,
-		`struct_pack(namespace := ?::VARCHAR, bucket := make_timestamp_ns(?::BIGINT), service := ?::VARCHAR)`,
+		serviceRollupAffectedKeyExpr,
 		func(keys string, args []any) error {
 			_, err := tx.ExecContext(ctx, "INSERT INTO service_pass_spans "+serviceRollupSpanSQL(keys)+" SELECT * FROM span_agg", append(args, lo, hi)...)
 			if err != nil {
@@ -1642,12 +1649,36 @@ func insertServiceRollup(ctx context.Context, tx rollupSQL, lo, hi time.Time) (s
 	if err != nil {
 		return nil, err
 	}
-	res, err := tx.ExecContext(ctx, "WITH span_agg AS (SELECT * FROM service_pass_spans)"+serviceRollupJoinSQL, lo, hi, lo, hi)
+	// Logs and metrics aggregate the same affected keys over the same bounded
+	// event-time range, so one old bucket cannot force a full-hull scan.
+	err = forAffectedKeys(ctx, tx, serviceRollupAffectedKeysSQL, nil,
+		`struct_pack(namespace := l.namespace, bucket := date_trunc('minute', l.time::TIMESTAMP_NS), service := l.service)`,
+		serviceRollupAffectedKeyExpr,
+		func(keys string, args []any) error {
+			_, err := tx.ExecContext(ctx, serviceRollupLogInsertSQL(keys), append(args, lo, hi)...)
+			return err
+		})
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, "DROP TABLE service_pass_spans"); err != nil {
+	err = forAffectedKeys(ctx, tx, serviceRollupAffectedKeysSQL, nil,
+		`struct_pack(namespace := m.namespace, bucket := date_trunc('minute', m.time::TIMESTAMP_NS), service := m.service)`,
+		serviceRollupAffectedKeyExpr,
+		func(keys string, args []any) error {
+			_, err := tx.ExecContext(ctx, serviceRollupMetricInsertSQL(keys), append(args, lo, hi)...)
+			return err
+		})
+	if err != nil {
 		return nil, err
+	}
+	res, err := tx.ExecContext(ctx, serviceRollupJoinSQL)
+	if err != nil {
+		return nil, err
+	}
+	for _, table := range []string{"service_pass_spans", "service_pass_logs", "service_pass_metrics"} {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE "+table); err != nil {
+			return nil, err
+		}
 	}
 	return res, nil
 }
@@ -1710,6 +1741,40 @@ func forAffectedKeys(ctx context.Context, tx rollupSQL, query string, queryArgs 
 	return nil
 }
 
+// serviceRollupAffectedKeysSQL lists the distinct affected service-minutes, and
+// serviceRollupAffectedKeyExpr is the constant each scan probes against. Both
+// are shared by the span, log and metric aggregates so every signal is filtered
+// to the same keys.
+const serviceRollupAffectedKeysSQL = `SELECT DISTINCT namespace, epoch_ns(bucket), service FROM service_pass_affected
+ WHERE namespace IS NOT NULL AND bucket IS NOT NULL AND service IS NOT NULL`
+
+const serviceRollupAffectedKeyExpr = `struct_pack(namespace := ?::VARCHAR, bucket := make_timestamp_ns(?::BIGINT), service := ?::VARCHAR)`
+
+// Log and metric aggregates probe the same constant affected-key list and the
+// same bounded event-time range as the span path, so one old or clock-skewed
+// bucket cannot widen them into a scan and group of the whole hull. Keys are
+// distinct, so each affected service-minute lands in exactly one chunk and its
+// COUNT and COUNT(DISTINCT name) are exact.
+func serviceRollupLogInsertSQL(keys string) string {
+	return `INSERT INTO service_pass_logs
+ SELECT l.namespace, date_trunc('minute', l.time::TIMESTAMP_NS), l.service, COUNT(*)
+ FROM logs l
+ WHERE ` + keys + `
+   AND l.time >= ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
+   AND l.time < ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
+ GROUP BY l.namespace, date_trunc('minute', l.time::TIMESTAMP_NS), l.service`
+}
+
+func serviceRollupMetricInsertSQL(keys string) string {
+	return `INSERT INTO service_pass_metrics
+ SELECT m.namespace, date_trunc('minute', m.time::TIMESTAMP_NS), m.service, COUNT(DISTINCT m.name)
+ FROM metrics m
+ WHERE ` + keys + `
+   AND m.time >= ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
+   AND m.time < ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
+ GROUP BY m.namespace, date_trunc('minute', m.time::TIMESTAMP_NS), m.service`
+}
+
 // Aggregate after probing the constant affected-key list, never by hashing raw
 // spans into a join against service_pass_affected. The histogram is O(buckets).
 func spanRollupInsertSQL(keys string) string {
@@ -1762,29 +1827,13 @@ WITH span_agg AS (
 )`
 }
 
-const serviceRollupJoinSQL = `,
-log_agg AS (
-  SELECT
-    l.namespace,
-    date_trunc('minute', l.time::TIMESTAMP_NS) AS bucket,
-    l.service,
-    COUNT(*) AS log_count
-  FROM logs l
-  WHERE l.time >= ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
-    AND l.time < ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
-  GROUP BY l.namespace, date_trunc('minute', l.time::TIMESTAMP_NS), l.service
-),
-metric_agg AS (
-  SELECT
-    m.namespace,
-    date_trunc('minute', m.time::TIMESTAMP_NS) AS bucket,
-    m.service,
-    COUNT(DISTINCT m.name) AS metric_count
-  FROM metrics m
-  WHERE m.time >= ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
-    AND m.time < ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
-  GROUP BY m.namespace, date_trunc('minute', m.time::TIMESTAMP_NS), m.service
-)
+// serviceRollupJoinSQL reads the materialized span, log and metric aggregates,
+// each already filtered to the affected keys, and joins them to every affected
+// service-minute so empty signals still produce a zeroed row.
+const serviceRollupJoinSQL = `
+WITH span_agg AS (SELECT * FROM service_pass_spans),
+log_agg AS (SELECT * FROM service_pass_logs),
+metric_agg AS (SELECT * FROM service_pass_metrics)
 INSERT INTO service_rollup (
   namespace,
   bucket,
