@@ -21,6 +21,18 @@ var panelRollupKeys = []struct {
 	{"endpoint_rollup", "namespace,bucket,service,kind,status,route,overflow"},
 }
 
+// derivedRollupKeys also dropped their ART primary keys. Their INSERT SQL is
+// too complex to re-derive from raw rows here, so they are guarded for schema
+// shape (no index, NOT NULL keys) and for key uniqueness after each refresh,
+// not for full raw-population equivalence.
+var derivedRollupKeys = []struct {
+	table string
+	keys  string
+}{
+	{"service_rollup", "namespace,bucket,service"},
+	{"edge_rollup", "namespace,bucket,caller,callee,edge_type"},
+}
+
 func TestPanelRollupKeysKeepNotNullWithoutIndexes(t *testing.T) {
 	d, _ := newBatchCacheTest(t)
 	for _, table := range panelRollupKeys {
@@ -44,6 +56,39 @@ func TestPanelRollupKeysKeepNotNullWithoutIndexes(t *testing.T) {
 						values[i] = time.Now().UTC().Truncate(time.Minute)
 					} else if name == "overflow" {
 						values[i] = false
+					}
+				}
+				values[nullAt] = nil
+				query := "INSERT INTO " + table.table + " (" + table.keys + ") VALUES (" + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + ")"
+				if _, err := d.DB.ExecContext(t.Context(), query, values...); err == nil || !strings.Contains(err.Error(), "NOT NULL") || !strings.Contains(err.Error(), table.table+"."+key) {
+					t.Errorf("NULL %s did not fail its NOT NULL constraint: %v", key, err)
+				}
+			}
+		})
+	}
+}
+
+func TestDerivedRollupKeysDropIndexesKeepNotNull(t *testing.T) {
+	d, _ := newBatchCacheTest(t)
+	for _, table := range derivedRollupKeys {
+		t.Run(table.table, func(t *testing.T) {
+			var constraints, indexes int
+			if err := d.DB.QueryRowContext(t.Context(), `SELECT count(*) FROM duckdb_constraints() WHERE table_name=? AND constraint_type IN ('PRIMARY KEY','UNIQUE')`, table.table).Scan(&constraints); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.DB.QueryRowContext(t.Context(), `SELECT count(*) FROM duckdb_indexes() WHERE table_name=?`, table.table).Scan(&indexes); err != nil {
+				t.Fatal(err)
+			}
+			if constraints != 0 || indexes != 0 {
+				t.Errorf("derived summary retains key constraints/indexes=%d/%d", constraints, indexes)
+			}
+			keys := strings.Split(table.keys, ",")
+			for nullAt, key := range keys {
+				values := make([]any, len(keys))
+				for i, name := range keys {
+					values[i] = ""
+					if name == "bucket" {
+						values[i] = time.Now().UTC().Truncate(time.Minute)
 					}
 				}
 				values[nullAt] = nil
@@ -158,7 +203,7 @@ func TestPanelRollupKeysUpgradePreviousCacheOnReopen(t *testing.T) {
 		t.Fatal("fixture did not warm analytical progress")
 	}
 	metadata := repo.Parquet.BatchMetadata()
-	for _, table := range panelRollupKeys {
+	for _, table := range append(append([]struct{ table, keys string }{}, panelRollupKeys...), derivedRollupKeys...) {
 		// Recreate the exact previous physical key design, rather than only
 		// changing a version number on an already unindexed cache.
 		if _, err := d.DB.ExecContext(t.Context(), "ALTER TABLE "+table.table+" ADD PRIMARY KEY ("+table.keys+")"); err != nil {
@@ -225,7 +270,7 @@ func TestPanelRollupKeysUpgradePreviousCacheOnReopen(t *testing.T) {
 	if err := d.QueryRowScan(t.Context(), []any{&spans, &logs}, `SELECT (SELECT count(*) FROM spans),(SELECT count(*) FROM logs)`); err != nil || spans != len(batch.Spans) || logs != len(batch.Logs) {
 		t.Fatalf("canonical rows after reopen=%d/%d: %v", spans, logs, err)
 	}
-	for _, table := range panelRollupKeys {
+	for _, table := range append(append([]struct{ table, keys string }{}, panelRollupKeys...), derivedRollupKeys...) {
 		var indexes int
 		if err := d.DB.QueryRowContext(t.Context(), `SELECT (SELECT count(*) FROM duckdb_constraints() WHERE table_name=? AND constraint_type IN ('PRIMARY KEY','UNIQUE'))+(SELECT count(*) FROM duckdb_indexes() WHERE table_name=?)`, table.table, table.table).Scan(&indexes); err != nil || indexes != 0 {
 			t.Fatalf("reopened %s key indexes=%d: %v", table.table, indexes, err)
@@ -282,7 +327,7 @@ func refreshPanelRollupKeys(t *testing.T, d *Duck) {
 	if _, err := d.refreshServiceRollup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range panelRollupKeys {
+	for _, table := range append(append([]struct{ table, keys string }{}, panelRollupKeys...), derivedRollupKeys...) {
 		var duplicates int
 		query := "SELECT count(*) FROM (SELECT " + table.keys + " FROM " + table.table + " GROUP BY " + table.keys + " HAVING count(*)<>1)"
 		if err := d.DB.QueryRowContext(t.Context(), query).Scan(&duplicates); err != nil || duplicates != 0 {
