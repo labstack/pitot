@@ -124,6 +124,10 @@ type ParquetStore struct {
 	generation0Batches int
 	// Published after each catalog mutation; scrapes never take mu.
 	generation0Snapshot atomic.Int64
+	// The canonically sorted catalog, republished after each mutation so
+	// BatchMetadata reads it without taking mu or sorting per call. The slice
+	// is shared and immutable; callers must not mutate it.
+	metadataSnapshot atomic.Pointer[[]BatchMetadata]
 	generation0ByWindow map[int64]int
 	compactionDebt      int
 	debtLimitReached    chan struct{}
@@ -215,9 +219,22 @@ func (p *ParquetStore) MergeParquet(ctx context.Context, signal string, inputs [
 	return stats, err
 }
 
+// BatchMetadata returns the installed batches in canonical order: generation,
+// then earliest ingest time, then ID. The result is a shared, immutable
+// snapshot republished on every catalog mutation, so this call takes no lock
+// and allocates nothing. Callers MUST NOT mutate it — no sorting, appending in
+// place, or assigning elements; clone it first (slices.Clone) if they need to.
 func (p *ParquetStore) BatchMetadata() []BatchMetadata {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	if snapshot := p.metadataSnapshot.Load(); snapshot != nil {
+		return *snapshot
+	}
+	return nil
+}
+
+// publishMetadataLocked rebuilds the canonically sorted catalog snapshot. It
+// runs under mu from setBatchLocked, the sole catalog mutation, so every commit,
+// replacement, restoration, rollback, startup load and retention refreshes it.
+func (p *ParquetStore) publishMetadataLocked() {
 	out := make([]BatchMetadata, 0, len(p.batches))
 	for _, batch := range p.batches {
 		out = append(out, batch.metadata)
@@ -231,7 +248,7 @@ func (p *ParquetStore) BatchMetadata() []BatchMetadata {
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out
+	p.metadataSnapshot.Store(&out)
 }
 
 // batchMetadataByID returns one installed batch without scanning the catalog.

@@ -78,6 +78,7 @@ func (p *ParquetStore) setBatchLocked(id string, batch *storedBatch) {
 		p.changeGeneration0Locked(batch.metadata, 1)
 	}
 	p.generation0Snapshot.Store(int64(p.generation0Batches))
+	p.publishMetadataLocked()
 	if p.compactionDebt >= CompactionDebtLimit && p.debtLimitReached != nil {
 		close(p.debtLimitReached)
 		p.debtLimitReached = nil
