@@ -954,9 +954,21 @@ const rollupChunkWins = 3
 // every affected bucket is recomputed whole, so a full window failed on
 // every retry and the rollup never advanced. A pass that did no work leaves
 // it unchanged: growing on those made it halve, grow and fail again.
+//
+// ceiling remembers the smallest window a committed streak grew back into and
+// then found too large (issue #481). Without it, rollupChunkWins successes
+// doubled the window straight back into the size that had just run out of
+// memory, so a dense region failed roughly every fourth pass forever. Growth
+// now caps strictly below the ceiling and holds at the largest known-safe
+// window. Only a failure the window grew into sets the ceiling: an initial or
+// a shrinking out-of-memory pass is one episode of pressure, not evidence that
+// a grown window is too large, so a transient spike or a deep backfill still
+// recovers to the full unbounded window once committed passes grow it back.
 type rollupChunk struct {
-	size int64
-	wins int
+	size    int64
+	wins    int
+	ceiling int64 // smallest grown-into window that ran out of memory; 0 = none
+	grew    bool  // the current window was reached by growing, not by shrinking
 }
 
 func (c *rollupChunk) next(committed bool, err error) {
@@ -971,14 +983,36 @@ func (c *rollupChunk) next(committed bool, err error) {
 			return
 		}
 		c.wins = 0
-		if c.size *= 2; c.size >= rollupChunkNanos {
+		// Hold at the largest known-safe window instead of doubling back into
+		// a size that already ran out of memory.
+		next := c.size * 2
+		if c.ceiling != 0 && next >= c.ceiling {
+			return
+		}
+		c.grew = true
+		if c.size = next; c.size >= rollupChunkNanos {
 			c.size = 0
 		}
 	case errors.As(err, &engineError) && engineError.Type == duckdb.ErrorTypeOutOfMemory:
+		// A window a committed streak grew into is now known too large: cap
+		// future growth strictly below it. A failure at the initial or a
+		// shrinking window is just ongoing pressure, not a grown window proven
+		// too large, so it records no ceiling and the window can still recover
+		// fully once the pressure clears.
+		if c.grew {
+			failing := c.size
+			if failing == 0 {
+				failing = rollupChunkNanos
+			}
+			if c.ceiling == 0 || failing < c.ceiling {
+				c.ceiling = failing
+			}
+		}
 		if c.size == 0 {
 			c.size = rollupChunkNanos
 		}
 		c.size = max(c.size/2, int64(time.Second))
+		c.grew = false
 		c.wins = 0
 	default:
 		c.wins = 0
@@ -991,17 +1025,19 @@ func (d *Duck) RefreshDashboardRollups(ctx context.Context) (int64, error) {
 	return d.drainServiceRollup(ctx, d.cfg.RollupInterval/2)
 }
 
-// drainServiceRollup repeats passes within a tick budget. An admitted pass
-// finishes its transaction; memory pressure narrows the next window.
+// drainServiceRollup repeats passes within a tick budget while committed work
+// remains. An admitted pass finishes its transaction; an out-of-memory pass
+// narrows the next window and ends the tick instead of retrying. Retrying a
+// failing window back-to-back ran it to the memory limit a dozen times across
+// the budget and starved the queries that memory is for (issue #481); ending
+// the tick lets the rollup loop's interval space the next attempt out.
 func (d *Duck) drainServiceRollup(ctx context.Context, budget time.Duration) (int64, error) {
 	deadline := time.Now().Add(budget)
 	var total int64
 	for {
-		before := d.serviceChunk.size
 		n, err := d.refreshServiceRollup(ctx)
 		total += n
-		retry := err != nil && d.serviceChunk.size != before
-		if err != nil && !retry || !retry && !d.servicePending || !time.Now().Before(deadline) {
+		if err != nil || !d.servicePending || !time.Now().Before(deadline) {
 			return total, err
 		}
 	}
