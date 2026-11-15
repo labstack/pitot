@@ -27,6 +27,7 @@ type Batch struct {
 // directory rename is the transaction and the filesystem is the catalog.
 type Repository struct {
 	releaseBacklogGauge func()
+	lock                *dataDirLock
 	root                string
 	Parquet             *telemetry.ParquetStore
 	compactionMu        sync.Mutex
@@ -44,11 +45,18 @@ func Open(root string) (*Repository, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
-	parquetStore, err := telemetry.OpenParquetStore(filepath.Join(root, "parquet"))
+	// Take the directory lock before touching any batch file, so a second
+	// process cannot delete this one's staging and compaction work mid-write.
+	lock, err := acquireDataDirLock(root)
 	if err != nil {
 		return nil, err
 	}
-	r := &Repository{root: root, Parquet: parquetStore}
+	parquetStore, err := telemetry.OpenParquetStore(filepath.Join(root, "parquet"))
+	if err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	r := &Repository{root: root, Parquet: parquetStore, lock: lock}
 	if err := r.recoverCompaction(context.Background(), func(ctx context.Context, _ telemetry.BatchMetadata, _ []string, publish func(context.Context) error) error {
 		return publish(ctx)
 	}); err != nil {
@@ -132,7 +140,14 @@ func (r *Repository) Close() error {
 	if r.releaseBacklogGauge != nil {
 		r.releaseBacklogGauge()
 	}
-	return r.Parquet.Close()
+	// Close the Parquet handles before releasing the lock, so the directory is
+	// quiescent by the time another process may acquire it.
+	err := r.Parquet.Close()
+	if r.lock != nil {
+		err = errors.Join(err, r.lock.Close())
+		r.lock = nil
+	}
+	return err
 }
 
 func (r *Repository) CompactionDebt() int { return r.Parquet.CompactionDebt() }
