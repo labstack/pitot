@@ -82,3 +82,53 @@ rebuildable disposable cache, so this needs no batch-format change.
   `span_rollup`/`log_rollup` directly?
 - Does deriving percentiles change any alert threshold's observed behavior
   enough to need a migration note for existing alert rules?
+
+## Research validation (2026-11-15)
+
+A three-angle research pass (prior art, in-codebase fit, performance) was run
+before build. Findings:
+
+**Prior art.** Deriving percentiles at read from a summed, mergeable
+exponential histogram is exactly how Prometheus native histograms
+(`histogram_quantile`), Mimir, and the existing dashboards compute them. The
+`span_rollup` histogram is already a scale-3 OTel exponential histogram, whose
+relative error is a fixed `(base-1)/(base+1) ≈ 4.33%` per bucket that holds
+*through merges* — i.e. it already has DDSketch-class guarantees, so adding a
+separate DDSketch/`quantileState` structure buys no new information. Averaging
+quantiles (`avg(p95)`, alerts) and `MAX(p95)` (overview) are textbook-wrong; the
+fix direction is unambiguously correct.
+
+**Framing to tighten:** the bug is the stored *scalar* `p50_ms`/`p95_ms` (a
+t-digest *result*), which is categorically non-mergeable. A t-digest *state*
+would be mergeable but has no formal post-merge error bound (reported >100% tail
+error after many merges), whereas the exponential histogram's bound holds through
+merges — so "derive from the histogram" is the clearly superior option, not just
+a convenient one. State the ±4.33% scale-3 bound in the proposal and use it to
+answer the alert-migration question: a threshold near a bucket edge can flip, so
+a migration note is required.
+
+**Required for the shared helper (all surfaces must use it):**
+
+1. **Apply the served-span kind filter** (`kind NOT IN CLIENT/PRODUCER`, with the
+   COALESCE-to-all fallback) before merging, or every latency number silently
+   changes and the "stream held open marks service unhealthy" fix regresses.
+2. **Replicate the served-vs-all choice.** Today the overview prefers served
+   buckets *per bucket*; a window-summed histogram can only choose served-only or
+   all-span over the whole window. The helper needs both merges and a rule ("use
+   served if served count > 0 over the window, else all") — close but not
+   identical to today's per-bucket COALESCE. This is a deliberate, documented
+   behavior change; decide it before building.
+3. **Pin the bin-interpolation method** (match the OTel/Prometheus convention).
+   Identical bins still disagree under different interpolation — this is the
+   likeliest way the three-way disagreement returns.
+4. Handle the **zero/empty bucket** and gaps, and ensure the histogram's total
+   count equals the error-rate denominator (**count-base consistency**).
+
+Also move both alert windows (previous and current) to the helper, and grep for
+any remaining reader of `service_rollup.metric_count` before dropping it.
+
+**Build readiness:** lowest risk of the three; read-side only, no format change,
+a `rollup_schema_version` bump (rebuildable). Ship first — it also proves the
+`span_rollup` histogram is the canonical input, de-risking 0007. Gate before
+build: the item-2 behavior-change decision plus the accuracy A/B
+(histogram-derived vs t-digest p95 on the same spans).

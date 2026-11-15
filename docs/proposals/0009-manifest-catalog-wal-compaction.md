@@ -94,3 +94,75 @@ can go.
 - Can the manifest ship incrementally (catalog snapshot first, WAL second,
   compaction/order third), and which steps need the format bump?
 - What is the measured boot and ingest win versus the incremental fixes alone?
+
+## Research validation (2026-11-15)
+
+A three-angle research pass (prior art, in-codebase fit, performance) was run
+before build. The direction of all three bets matches best-in-class systems, but
+the parallel-compaction bet is **not safe to build as drafted**. Findings by bet:
+
+**Manifest catalog — strongest-grounded.** Append-only manifest + boot-as-replay
++ one refcounted immutable snapshot shared by all readers is Iceberg
+(`metadata.json` → manifest list), Delta Lake (`_delta_log` + checkpoints), and
+Lucene (`segments_N` commit points) — the last maps directly onto replacing the
+`pinMu`/epoch scheme. **Missing piece (highest value): manifest
+checkpointing.** An add/replace/prune log grows unbounded, so boot-replay cost
+creeps back to O(history) — the problem relocated into the log. Add a periodic
+manifest checkpoint/snapshot, old-record pruning, orphan-file cleanup, and
+explicit tombstone / expire-before-delete crash semantics (Delta checkpoints
+every ~10 commits; Iceberg has `rewrite_manifests` + snapshot expiry). The
+manifest must preserve the pin/epoch guarantee exactly: no reader excluded or
+waited for, directories survive until no pin ≤ epoch.
+
+**WAL + head block.** Ack-after-`fdatasync` + cut a batch at a size/time
+threshold is RocksDB/Elasticsearch-standard; a queryable in-memory head is
+Prometheus TSDB / Druid real-time / Lucene NRT. **Recommend the queryable-head
+path** to preserve today's "immediately visible" contract (AGENTS.md); the
+freshness-lag option is a genuine product regression, a fallback only. **Missing
+piece: a WAL replay bound** — truncate/rotate/checkpoint the WAL once the head is
+cut to Parquet, paired with the manifest checkpoint, or replay is unbounded.
+
+**Parallel tiered compaction — do NOT build as drafted.** Parallel lanes over
+disjoint groups with no discard-on-preempt is RocksDB subcompactions / Lucene
+CMS; time-leading span order with a trace-id→row-group index is Grafana Tempo's
+vParquet. But against today's single-marker machinery it loses data:
+
+1. **Per-lane durable state.** There is one `COMPACTION.json`, one
+   `COMPACTION-ATTEMPT.json`, one staging root, and one `recoverCompaction` that
+   runs before any pass. Two lanes overwrite each other's marker → on crash the
+   other lane's already-retired inputs are orphaned with no rollback record
+   (data loss; the inputs hold the only copy). Needs per-lane markers + attempt
+   records + per-lane preempt size, and recovery that iterates *all* markers and
+   protects *both* outputs' `.retired-<id>` sets in cleanup.
+2. **Disjoint input partitioning is mandatory.** `selectCompactionBatchesWith-
+   HigherCap` is not lane-aware; two concurrent calls on the same snapshot can
+   select overlapping batches (a day group and an hour group both containing
+   batch X), double-retiring X. Lanes must claim non-overlapping batch sets
+   atomically under `compactionMu` before releasing to merge, each excluding the
+   other lane's claimed IDs.
+3. **Split the memory budget.** `maxCompactionBytes` (768 MiB) is sized for ONE
+   merge against the 4 GB DuckDB budget; two concurrent merges double peak RSS
+   and can OOM. Removing `errCompactionPreempted` is safe **only after** disjoint
+   partitioning *and* a split/halved per-lane byte budget — otherwise a
+   preempt-and-retry is traded for an OOM. Reserve ≥1 lane for small/recent
+   parts so a multi-day merge cannot starve freshness-critical compactions
+   (ClickHouse/LSM lesson).
+4. **Span reorder needs a format bump** (format 5 → 6; the offline sort-tuple
+   check updates with it), validated on non-pico data per the no-curve-fitting
+   rule. Accept and document the trace-by-id point-lookup regression: one hash
+   maps to several row-group ranges, so `trace.fidx` must store *all* ranges and
+   get-trace unions them (Tempo accepts this with bloom filters + index).
+
+**Incremental fixes ship first, regardless of the manifest.** The
+`BatchMetadata()` atomic pre-sorted snapshot is **already done** (PR #488), so
+the per-statement catalog-copy win is banked and the manifest is now justified
+only by residual boot cost. Header-only boot loading is still to do and is the
+next cheap, invariant-safe win.
+
+**Build sequence:** (1) decide the WAL freshness guarantee (product call, no
+code); (2) header-only boot A/B to settle whether the manifest is even needed;
+(3) manifest + checkpointing (no format bump, backfillable); (4) WAL + queryable
+head (freshness-gated); (5) parallel compaction + span reorder (format bump,
+per-lane durability + disjoint partition + split budget, validated on chip).
+Steps 3–5 are each independently revertible pre-release except the format bump,
+whose rollback is "rebuild," not "downgrade."

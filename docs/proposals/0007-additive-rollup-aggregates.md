@@ -108,3 +108,57 @@ checkpoints for these tables entirely, at the cost of a batch-format bump.
   windows, or does it force the compaction-fold step into phase one?
 - Measurement: A/B the additive model against the current model on non-pico
   data before committing.
+
+## Research validation (2026-11-15)
+
+A three-angle research pass (prior art, in-codebase fit, performance) was run
+before build. Findings:
+
+**Prior art.** This design is ClickHouse's `AggregatingMergeTree` with the
+`-State` / `-Merge` combinators: write a partial aggregate state per batch,
+combine states at read, fold states during a background merge. Apache Druid's
+ingestion-time rollup is the same idea for the phase-2 immutable sidecar. The
+repository already runs this pattern for `read_trace_parts` via
+`transferBatchCacheLocked`, so there is an in-repo precedent, not only external
+ones. Keeping only associative/commutative stats on the additive model and
+leaving non-additive ones (endpoint top-128 fold, joins) on re-aggregation
+matches ClickHouse and Pinot guidance exactly.
+
+**Required revisions before build:**
+
+1. **Make the compaction fold mandatory in phase one, not an open question.**
+   ClickHouse's best-known production failure is "too many unmerged parts": a
+   read-time `-Merge` over thousands of per-batch states is slow, and the whole
+   design depends on background merges keeping the state count low. Phase one
+   without the fold reproduces that slowness at long windows. The in-repo
+   `transferBatchCacheLocked` already folds inputs into the compaction output,
+   so commit to it from the start.
+2. **State the correctness invariants explicitly:** exactly-once contribution (a
+   batch's partial is counted once across retries via its `read_batches` marker,
+   and a compaction output *replaces* its inputs, never adds to them); store
+   `sum` + `count`, never `avg`, and divide at read for error rate and means;
+   every batch histogram is at the same scale-3 layout so bin-merge is exact
+   (reject or downscale-align anything else).
+3. **Resolve the cross-gate snapshot design.** Moving span/log/endpoint rollups
+   onto per-batch partials moves them from the writeGate/watermark world to the
+   cacheGate/`read_batches` world, while `service_rollup` (0008) and
+   `edge_rollup` stay analytical. A consumer that reads a span partial *and* an
+   analytical rollup then spans two gates/snapshots and can see a torn view.
+   AGENTS.md requires maintenance to hold both gates for checkpointing; the
+   proposal must specify how a reader gets a consistent cross-gate snapshot.
+4. **Name the residual.** Phase one keeps partials in the version-gated
+   disposable cache, so a cache-version bump re-derives all partials from raw
+   Parquet — the exact full-hull scan this removes, merely deferred to rebuild.
+   Only the phase-2 immutable Parquet sidecar removes that scan permanently.
+
+**Status confirmed.** The ART primary keys on `span`/`log`/`endpoint`/`service`/
+`edge_rollup` are already dropped on `main` (`rollup_schema_version` 5), so the
+"already dropped" premise holds; the additive model's duplicate-per-batch rows
+will not violate a PK. Versioning: a `readCacheVersion` + `rollup_schema_version`
+bump (rebuildable, no format bump, no Goose) for phase one; a batch-format bump
+only for the phase-2 sidecar.
+
+**Build readiness:** buildable after the cross-gate design (item 3) is specified
+and the compaction fold is committed (item 1). Lower-risk fallback remains the
+0007 "cliff fixes" (bucket-order affected keys, per-chunk bounds, key-filter the
+log/metric aggregates) if the 30-day read-merge A/B blows the panel budget.
