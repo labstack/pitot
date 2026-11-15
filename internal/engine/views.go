@@ -8,11 +8,16 @@ import (
 	"github.com/labstack/pitot/internal/telemetry"
 )
 
+// service_rollup drops its compound ART primary key for the same reason as the
+// scan summaries below. refreshServiceRollup replaces each affected scope in one
+// serialized transaction and its INSERT groups by the complete logical key, so
+// uniqueness holds without an index DuckDB would probe under the checkpoint
+// vacuum lock. Keep every key column NOT NULL.
 const createServiceRollupTable = `
 CREATE TABLE IF NOT EXISTS service_rollup (
-  namespace TEXT,
-  bucket TIMESTAMP,
-  service TEXT,
+  namespace TEXT NOT NULL,
+  bucket TIMESTAMP NOT NULL,
+  service TEXT NOT NULL,
   spans BIGINT,
   -- Spans that describe work this service performed, rather than a call it was
   -- waiting on. A bucket with none of them has no latency of its own to report,
@@ -22,26 +27,29 @@ CREATE TABLE IF NOT EXISTS service_rollup (
   p95_ms DOUBLE,
   error_rate DOUBLE,
   log_count BIGINT DEFAULT 0,
-  metric_count BIGINT DEFAULT 0,
-  PRIMARY KEY (namespace, bucket, service)
+  metric_count BIGINT DEFAULT 0
 );`
 
 // spanHistogramZero is outside the index range of positive finite durations.
 const spanHistogramZero = -2147483648
 
+// These scan-oriented summaries intentionally have no ART primary key.
+// refreshServiceRollup serializes complete affected-scope replacement in one
+// transaction, and each INSERT groups by the complete logical key. Keep every
+// key column NOT NULL. A compound ART cannot accelerate these scans, but the
+// pinned engine probes it under a vacuum lock that waits on full checkpoints.
 const createSpanRollupTable = `
 CREATE TABLE IF NOT EXISTS span_rollup (
-  namespace TEXT,
-  bucket TIMESTAMP_NS,
-  service TEXT,
-  kind TEXT,
-  status TEXT,
+  namespace TEXT NOT NULL,
+  bucket TIMESTAMP_NS NOT NULL,
+  service TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
   spans BIGINT,
   duration_sum DOUBLE,
   duration_min DOUBLE,
   duration_max DOUBLE,
-  hist MAP(INTEGER, UBIGINT),
-  PRIMARY KEY (namespace, bucket, service, kind, status)
+  hist MAP(INTEGER, UBIGINT)
 );`
 
 // Endpoint summaries retain at most 128 routes per service-minute plus one
@@ -50,31 +58,36 @@ const endpointRouteLimit = 128
 
 const createEndpointRollupTable = `
 CREATE TABLE IF NOT EXISTS endpoint_rollup (
- namespace TEXT, bucket TIMESTAMP_NS, service TEXT, kind TEXT, status TEXT,
- route TEXT, overflow BOOLEAN, spans BIGINT, duration_sum DOUBLE,
- duration_min DOUBLE, duration_max DOUBLE, hist MAP(INTEGER, UBIGINT),
- PRIMARY KEY (namespace,bucket,service,kind,status,route,overflow)
+ namespace TEXT NOT NULL, bucket TIMESTAMP_NS NOT NULL, service TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL,
+ route TEXT NOT NULL, overflow BOOLEAN NOT NULL, spans BIGINT, duration_sum DOUBLE,
+ duration_min DOUBLE, duration_max DOUBLE, hist MAP(INTEGER, UBIGINT)
 );`
 
 const createLogRollupTable = `
 CREATE TABLE IF NOT EXISTS log_rollup (
- namespace TEXT, bucket TIMESTAMP_NS, service TEXT, severity TEXT,
- logs BIGINT, PRIMARY KEY(namespace,bucket,service,severity)
+ namespace TEXT NOT NULL, bucket TIMESTAMP_NS NOT NULL, service TEXT NOT NULL, severity TEXT NOT NULL,
+ logs BIGINT
 );`
 
+// edge_rollup also drops its ART primary key. Its pass deletes the affected
+// window and reinserts it in one serialized transaction. The INSERT is a
+// UNION ALL of three branches whose edge_type literals ('call', 'messaging',
+// 'peer') are disjoint, and each branch groups by (namespace, bucket, caller,
+// callee), so the complete key stays unique without the index. A new branch
+// MUST use a distinct edge_type and group by the full key, or uniqueness
+// breaks silently. Keep every key column NOT NULL.
 const createEdgeRollupTable = `
 CREATE TABLE IF NOT EXISTS edge_rollup (
-  namespace TEXT,
-  bucket TIMESTAMP,
-  caller TEXT,
-  callee TEXT,
+  namespace TEXT NOT NULL,
+  bucket TIMESTAMP NOT NULL,
+  caller TEXT NOT NULL,
+  callee TEXT NOT NULL,
   calls BIGINT,
   avg_ms DOUBLE,
   error_rate DOUBLE,
-  edge_type TEXT DEFAULT 'call',
+  edge_type TEXT NOT NULL DEFAULT 'call',
   p50_ms DOUBLE DEFAULT 0,
-  p95_ms DOUBLE DEFAULT 0,
-  PRIMARY KEY (namespace, bucket, caller, callee, edge_type)
+  p95_ms DOUBLE DEFAULT 0
 );`
 
 const createRollupStateTable = `

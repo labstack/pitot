@@ -418,7 +418,7 @@ func (e *Executor) run(ctx context.Context, req RunRequest, emit func(int, Resul
 				if keyErr != nil {
 					return ErrBusy
 				}
-				lookups = append(lookups, panelCacheLookup{key: key, id: p.ID})
+				lookups = append(lookups, panelCacheLookup{key: key, id: p.ID, fixedWindow: t.From != nil && t.To != nil})
 			}
 			if results, available, snapshotErr := e.availablePanels(caller, lookups, now); available {
 				if snapshotErr != nil {
@@ -480,7 +480,7 @@ func (e *Executor) run(ctx context.Context, req RunRequest, emit func(int, Resul
 					send(i, failed(Result{ID: p.ID}, err, nil))
 					return nil
 				}
-				out, outcome, err := loadCached(e, context.WithValue(caller, panelBatchKey{}, batch), key, now, func(run context.Context) (panelOutcome, int64, bool, error) {
+				out, outcome, err := loadCachedForWindow(e, context.WithValue(caller, panelBatchKey{}, batch), key, now, t.From != nil && t.To != nil, func(run context.Context) (panelOutcome, int64, bool, error) {
 					run = context.WithValue(run, deferDiagnosisKey{}, deferDiagnosis)
 					// The refresh already owns its lease; siblings wait locally.
 					admissionStarted := time.Now()

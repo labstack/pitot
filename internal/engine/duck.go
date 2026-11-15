@@ -87,6 +87,9 @@ type Duck struct {
 	publicationBounds func() (horizon, published, minimum int64)
 	// Cached under writeGate so an idle pass executes no SQL at all.
 	rollupWatermarks map[string]int64
+	// Standalone panel preflight reads a committed freshness lower bound without
+	// borrowing a native connection. Snapshot-bound coverage still reads SQL.
+	committedServiceWatermark atomic.Int64
 	// serviceChunk narrows the service rollup's ingest window after it runs
 	// out of memory. Guarded by writeGate.
 	serviceChunk rollupChunk
@@ -128,7 +131,7 @@ const (
 	// Rollup progress keys in rollup_state. readCacheVersion drops that table
 	// with the rollups, so a version change also restarts their backfill; the
 	// keys need no version of their own.
-	rollup_schema_version         = 4
+	rollup_schema_version         = 5
 	serviceRollupStateKey         = "service_rollup_v3"
 	edgeRollupStateKey            = "edge_rollup_v2"
 	edgeRollupSubCursorKey        = "edge_rollup_v2_substart"
@@ -355,6 +358,7 @@ func (d *Duck) skipRollupToLatest(ctx context.Context) error {
 		return err
 	}
 	d.rollupWatermarks = map[string]int64{serviceRollupStateKey: horizon, edgeRollupStateKey: horizon}
+	d.committedServiceWatermark.Store(horizon)
 	return nil
 }
 
@@ -558,23 +562,83 @@ func (d *Duck) tryLockBackground() func() {
 func (d *Duck) writer() *sql.DB { return d.writeDB }
 
 // checkpoint folds the rollup cache's WAL back into its file, and says how long
-// that took. A checkpoint blocks new transactions for its duration, so it is a
-// candidate explanation for a stalled query and has to be measurable.
+// that took. Checkpoint work can contend with reads, so it is a candidate
+// explanation for a stalled query and has to be measurable.
 //
-// The non-FORCE form refuses while another *write* transaction is open. Every
-// domain is serialized by its own gate. Maintenance holds both gates before
-// calling this function, so a refusal should not happen — the counter is there
-// to say so rather than to be assumed. Only a checkpoint that ran is timed: a
-// refusal returns in microseconds and would drag the distribution towards zero,
-// which is the opposite of what the histogram is for.
-func (d *Duck) checkpoint(ctx context.Context) error {
+// Maintenance holds both write gates throughout this operation. The pinned
+// engine can still return its transaction-conflict diagnostic when an older
+// reader remains open after a newer write commits. Give that reader a bounded
+// opportunity to drain; keep one writer connection and admit no new writers.
+// Other errors are not retried. Metrics describe the logical operation: one
+// failure on exhaustion/error, or one successful duration including retry wait.
+func (d *Duck) checkpoint(ctx context.Context) (retErr error) {
 	start := time.Now()
-	if _, err := d.writer().ExecContext(ctx, "CHECKPOINT"); err != nil {
-		metrics.DuckDBCheckpointFailures.Inc()
+	defer func() {
+		if retErr != nil {
+			metrics.DuckDBCheckpointFailures.Inc()
+		} else {
+			metrics.DuckDBCheckpoint.Observe(time.Since(start).Seconds())
+		}
+	}()
+	conn, err := d.writer().Conn(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
-	metrics.DuckDBCheckpoint.Observe(time.Since(start).Seconds())
-	return nil
+	defer conn.Close()
+	// This bounds retry admission/wait only. A successful native checkpoint can
+	// legitimately take longer, and retains the caller's execution budget.
+	retryCtx, cancel := context.WithTimeout(ctx, checkpointRetryBudget)
+	defer cancel()
+	var lastConflict error
+	budgetError := func() error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("checkpoint retry budget exhausted after %s: %w", checkpointRetryBudget, errors.Join(lastConflict, retryCtx.Err()))
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if lastConflict != nil && retryCtx.Err() != nil {
+			return budgetError()
+		}
+		_, err := conn.ExecContext(ctx, "CHECKPOINT")
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err == nil {
+			return nil
+		}
+		if !checkpointRetryable(err) {
+			return err
+		}
+		lastConflict = err
+		if retryCtx.Err() != nil {
+			return budgetError()
+		}
+		timer := time.NewTimer(checkpointRetryDelay)
+		select {
+		case <-retryCtx.Done():
+			timer.Stop()
+			return budgetError()
+		case <-timer.C:
+		}
+	}
+}
+
+const (
+	checkpointRetryBudget = 250 * time.Millisecond
+	checkpointRetryDelay  = 10 * time.Millisecond
+	checkpointBusyMessage = "TransactionContext Error: Cannot CHECKPOINT: there are other write transactions active. Try using FORCE CHECKPOINT to wait until all active transactions are finished"
+)
+
+func checkpointRetryable(err error) bool {
+	var native *duckdb.Error
+	return errors.As(err, &native) && native.Type == duckdb.ErrorTypeTransaction && native.Error() == checkpointBusyMessage
 }
 
 // DefaultNamespace returns empty string so queries search all namespaces.
@@ -583,6 +647,15 @@ func (d *Duck) DefaultNamespace() string {
 }
 
 func (d *Duck) RunRollups(ctx context.Context) {
+	// Retire file debt while the initial analytical pass catches up too. Waiting
+	// for that pass leaves foreground reads on the larger startup catalog.
+	maintenanceDone := make(chan struct{})
+	go func() {
+		defer close(maintenanceDone)
+		d.runMaintenanceLoop(ctx)
+	}()
+	defer func() { <-maintenanceDone }()
+
 	// rollupOnce can return rows AND an error (one cache committed while another
 	// failed), so telemetry is recorded unconditionally — otherwise the rollup
 	// throughput metric flatlines on an instance whose service rollup is
@@ -597,12 +670,6 @@ func (d *Duck) RunRollups(ctx context.Context) {
 		slog.Info("startup rollup complete", "rows", rows, "duration", time.Since(start))
 	}
 	d.updateParquetStats(ctx)
-	maintenanceDone := make(chan struct{})
-	go func() {
-		defer close(maintenanceDone)
-		d.runMaintenanceLoop(ctx)
-	}()
-	defer func() { <-maintenanceDone }()
 	readCacheDone := make(chan struct{})
 	go func() {
 		defer close(readCacheDone)
@@ -1003,7 +1070,11 @@ func (d *Duck) refreshServiceRollup(ctx context.Context) (affected int64, err er
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	unbind, err := d.bindRollupSnapshot(ctx, tx)
+	var captured []telemetry.BatchMetadata
+	if d.repository != nil && d.repository.Parquet != nil {
+		captured = d.repository.Parquet.BatchMetadata()
+	}
+	unbind, err := d.bindRollupSnapshotFiles(ctx, tx, captured, nil)
 	if err != nil {
 		return 0, fmt.Errorf("service_rollup/snapshot: %w", err)
 	}
@@ -1027,6 +1098,13 @@ func (d *Duck) refreshServiceRollup(ctx context.Context) (affected int64, err er
 	// delete or insert any buckets. Keep exact signed nanoseconds in Go.
 	if lower.Valid && upper.Valid {
 		lo, hi := time.Unix(0, lower.Int64).UTC(), time.Unix(0, upper.Int64).UTC()
+		// Every recomputation below reads this event interval. Avoid repeatedly
+		// preparing unrelated retained files after affected-key discovery, while
+		// keeping the original captured catalog and complete affected buckets.
+		window := queryrows.Window{Start: lo, End: hi}
+		if _, err := d.bindRollupSnapshotFiles(ctx, tx, captured, &window); err != nil {
+			return 0, fmt.Errorf("service_rollup/affected_snapshot: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, serviceRollupDeleteSQL, lo, hi); err != nil {
 			return 0, fmt.Errorf("service_rollup/delete: %w", err)
 		}
@@ -1062,6 +1140,7 @@ func (d *Duck) refreshServiceRollup(ctx context.Context) (affected int64, err er
 	}
 	result = metrics.RollupSuccess
 	d.rollupWatermarks[serviceRollupStateKey] = newWatermark
+	d.committedServiceWatermark.Store(newWatermark)
 	updateRollupProgress(metrics.RollupService, true, newWatermark, published)
 
 	recordedRows = rows
@@ -1421,6 +1500,7 @@ func (d *Duck) loadRollupWatermarks(ctx context.Context) error {
 		return err
 	}
 	d.rollupWatermarks = watermarks
+	d.committedServiceWatermark.Store(watermarks[serviceRollupStateKey])
 	return nil
 }
 
@@ -2405,13 +2485,14 @@ func (d *Duck) PublishParquet(ctx context.Context, publish func(context.Context)
 
 // ---- Queries for API ----
 
-// RollupWatermark is the ingest horizon shared by service_rollup and span_rollup.
-// Read persisted state instead of the writer-owned in-memory cursor.
+// RollupWatermark is the committed ingest horizon shared by service_rollup and
+// span_rollup. This standalone preflight precedes the panel's data snapshot;
+// snapshot-bound coverage checks read persisted state in their own transaction.
 func (d *Duck) RollupWatermark(ctx context.Context) (time.Time, error) {
-	var stamp int64
-	if err := d.QueryRowScan(ctx, []any{&stamp}, `SELECT coalesce((SELECT last_ingested_unix_nano FROM rollup_state WHERE cache_key=?),0)`, serviceRollupStateKey); err != nil {
+	if err := ctx.Err(); err != nil {
 		return time.Time{}, err
 	}
+	stamp := d.committedServiceWatermark.Load()
 	if stamp == 0 {
 		return time.Time{}, nil
 	}
