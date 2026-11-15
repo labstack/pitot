@@ -94,6 +94,69 @@ func TestSnapshotUsesActualEventBoundsAndPreservesParameters(t *testing.T) {
 	}
 
 }
+
+// A trusted SQL panel may window on a column other than a signal's
+// footer-sorted event-time clock. Pruning raw files by the clock then drops
+// rows the panel's own predicate keeps. When the windowed column is not the
+// signal's clock, every captured file for that signal must bind.
+func TestSQLPanelBindsAllFilesWhenWindowColumnIsNotTheFooterClock(t *testing.T) {
+	d, repo := newBatchCacheTest(t)
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	// Spans are footer-sorted on start_time, but this panel windows on end_time.
+	commit := func(id string, start, end time.Time) {
+		t.Helper()
+		if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: id, Spans: []telemetry.Span{{
+			TraceID: "trace", SpanID: id, StartUnixNanos: start.UnixNano(), EndUnixNanos: end.UnixNano(), IngestedAt: at.UnixNano(),
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit("before", at.Add(-time.Hour), at.Add(30*time.Second)) // starts before the window, ends inside it
+	commit("inside", at, at.Add(time.Second))
+	commit("after", at.Add(time.Hour), at.Add(time.Hour+time.Second))
+
+	w := queryrows.Window{Start: at, End: at.Add(time.Minute)}
+	ctx := queryrows.WithWindowColumns(queryrows.WithWindow(t.Context(), w), []string{"end_time"})
+	var count int
+	q := `SELECT count(*) FROM spans WHERE end_time>=?::TIMESTAMP_NS::TIMESTAMPTZ_NS AND end_time<?::TIMESTAMP_NS::TIMESTAMPTZ_NS`
+	if err := d.QueryRowScan(ctx, []any{&count}, q, w.Start, w.End); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("end_time window pruned by the start_time footer dropped rows: count=%d want 2", count)
+	}
+}
+
+// The default dashboard windows spans on their clock (start_time). That common
+// case must still prune to the overlapping files, with no file-selection
+// regression from the non-clock fix above.
+func TestSQLPanelPrunesFilesWhenWindowColumnIsTheFooterClock(t *testing.T) {
+	d, repo := newBatchCacheTest(t)
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for i := range 3 {
+		start := at.Add(time.Duration(i-1) * time.Hour)
+		if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: fmt.Sprint("batch", i), Spans: []telemetry.Span{{
+			TraceID: "trace", SpanID: fmt.Sprint(i), StartUnixNanos: start.UnixNano(), EndUnixNanos: start.UnixNano() + 1, IngestedAt: at.UnixNano(),
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := queryrows.Window{Start: at, End: at.Add(time.Minute)}
+	conn, err := d.DB.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx := queryrows.WithWindowColumns(t.Context(), []string{"start_time"})
+	rewritten, err := d.bindSnapshot(ctx, conn, `SELECT * FROM spans`, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rewritten, "batch0.batch") || strings.Contains(rewritten, "batch2.batch") || !strings.Contains(rewritten, "batch1.batch") {
+		t.Fatalf("clock window did not prune to the overlapping file: %s", rewritten)
+	}
+}
+
 func TestCompletedBatchCachesIncludeLatePublicationAndPartialMinutes(t *testing.T) {
 	d, repo := newBatchCacheTest(t)
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)

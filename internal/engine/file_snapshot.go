@@ -29,6 +29,28 @@ func overlapping(b telemetry.BatchMetadata, signal string, w queryrows.Window) b
 	return count > 0 && (!bounds.Known || bounds.MaxNanos >= w.Start.UnixNano() && bounds.MinNanos < w.End.UnixNano())
 }
 
+// signalWindowBounded reports whether a windowed column from a trusted SQL
+// panel bounds this signal's own event-time clock, so that pruning files to the
+// read window is sound. A bare column must equal the clock; a qualified column
+// must name the signal's own relation (alias qualifiers we cannot resolve stay
+// unbounded, which binds every file — correct, if slower). Columns come only
+// from the validated macro expansion, never from unvalidated statement text.
+func signalWindowBounded(columns []string, s *telemetry.Signal) bool {
+	clock := s.Clock()
+	for _, column := range columns {
+		if dot := strings.LastIndexByte(column, '.'); dot >= 0 {
+			if column[dot+1:] == clock && strings.EqualFold(column[:dot], s.Name) {
+				return true
+			}
+			continue
+		}
+		if column == clock {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Duck) physicalSource(signal string, batches []telemetry.BatchMetadata) string {
 	s, _ := telemetry.LookupSignal(signal)
 	sort.SliceStable(batches, func(i, j int) bool {
@@ -148,6 +170,7 @@ func (d *Duck) bindSnapshot(ctx context.Context, db snapshotSQL, query string, w
 		}
 		queryrows.RecordCoverage(ctx, fresh)
 	}
+	windowColumns, scopedColumns := queryrows.ReadWindowColumns(ctx)
 	for _, s := range telemetry.Signals {
 		signal := s.Name
 		if _, raw := compiled.names["telemetry."+signal]; !raw {
@@ -155,15 +178,25 @@ func (d *Duck) bindSnapshot(ctx context.Context, db snapshotSQL, query string, w
 				continue
 			}
 		}
+		// A raw signal is event-time pruned only when the statement actually
+		// bounds its own clock with the window. When a trusted SQL panel windows
+		// on another column (or joins this signal unwindowed), pruning by the
+		// clock would drop rows the statement keeps, so bind every captured file.
+		selectWindow := w
+		if scopedColumns && !signalWindowBounded(windowColumns, s) {
+			selectWindow = allTime
+		}
 		selected := []telemetry.BatchMetadata{}
 		for _, b := range batches {
-			if overlapping(b, signal, w) {
+			if overlapping(b, signal, selectWindow) {
 				selected = append(selected, b)
 			}
 		}
 		// Only an explicit internal window may prune. Public arbitrary SQL
-		// uses allTime and always binds every captured file.
-		if signal == "metrics" && len(compiled.metricNames) > 0 && w != allTime {
+		// uses allTime and always binds every captured file. Metric-name
+		// pruning likewise requires the metrics signal to be genuinely
+		// window-bounded.
+		if signal == "metrics" && len(compiled.metricNames) > 0 && selectWindow != allTime {
 			var err error
 			selected, err = pruneMetricNames(ctx, db, selected, compiled.metricNames)
 			if err != nil {

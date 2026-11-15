@@ -271,7 +271,7 @@ func checkValidated(ctx context.Context, parser Parser, d *Dashboard, memo *chec
 }
 
 func checkSQLPanel(ctx context.Context, parser Parser, p *Panel, vars map[string]Variable) error {
-	expanded, err := expandMacros(p.SQL, time.Minute)
+	expanded, _, err := expandMacros(p.SQL, time.Minute)
 	if err != nil {
 		return err
 	}

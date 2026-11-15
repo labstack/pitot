@@ -23,12 +23,17 @@ var (
 // never carry SQL. Every SQL panel must declare its selected time window.
 // Its snapshot covers that window plus the metric lookback before it, so an
 // explicit lookback predicate of up to ten minutes stays visible.
-func expandMacros(sql string, interval time.Duration) (string, error) {
+func expandMacros(sql string, interval time.Duration) (string, []string, error) {
 	if !windowMacro.MatchString(sql) {
-		return "", errors.New("SQL panels must filter time with $__window(time_column)")
+		return "", nil, errors.New("SQL panels must filter time with $__window(time_column)")
 	}
+	var columns []string
 	out := windowMacro.ReplaceAllStringFunc(sql, func(macro string) string {
 		column := windowMacro.FindStringSubmatch(macro)[1]
+		// The macro argument is the only legitimate prune key, and it is
+		// unambiguous here. Record it so file pruning can later check it against
+		// each raw signal's event-time clock.
+		columns = append(columns, column)
 		// Analytical bucket columns can be TIMESTAMP_NS. Make their UTC
 		// instant explicit; raw signal clocks already carry TIMESTAMPTZ_NS.
 		if column == "bucket" || strings.HasSuffix(column, ".bucket") {
@@ -43,10 +48,10 @@ func expandMacros(sql string, interval time.Duration) (string, error) {
 	out = bucketMacro.ReplaceAllString(out, fmt.Sprintf(`time_bucket(INTERVAL '%d seconds', $1::TIMESTAMP_NS)`, seconds))
 	for _, m := range macroToken.FindAllStringSubmatch(stripQuoted(out), -1) {
 		if m[1] != "from" && m[1] != "to" {
-			return "", fmt.Errorf("unknown macro $__%s; use $__window(column) or $__bucket(column)", m[1])
+			return "", nil, fmt.Errorf("unknown macro $__%s; use $__window(column) or $__bucket(column)", m[1])
 		}
 	}
-	return out, nil
+	return out, columns, nil
 }
 
 // canonicalSQL parses macro-expanded panel SQL, renders it back with DuckDB,

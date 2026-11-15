@@ -18,7 +18,7 @@ func TestSQLPanelExecutionMatchesDescribedStructBinding(t *testing.T) {
 	e := NewExecutor(engine, 30)
 	e.now = func() time.Time { return fixtureStart.Add(time.Hour) }
 	text := "SELECT telemetry.logs.body AS b FROM (SELECT {'body': 42} AS logs) AS telemetry, logs WHERE $__window(logs.time)"
-	expanded, err := expandMacros(text, time.Minute)
+	expanded, _, err := expandMacros(text, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
