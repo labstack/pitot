@@ -127,7 +127,7 @@ type ParquetStore struct {
 	// The canonically sorted catalog, republished after each mutation so
 	// BatchMetadata reads it without taking mu or sorting per call. The slice
 	// is shared and immutable; callers must not mutate it.
-	metadataSnapshot atomic.Pointer[[]BatchMetadata]
+	metadataSnapshot    atomic.Pointer[[]BatchMetadata]
 	generation0ByWindow map[int64]int
 	compactionDebt      int
 	debtLimitReached    chan struct{}
