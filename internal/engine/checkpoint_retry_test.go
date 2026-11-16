@@ -92,9 +92,15 @@ func TestMaintenanceCheckpointWaitsForOldReaderToDrain(t *testing.T) {
 	if err := <-result; err != nil {
 		t.Fatalf("checkpoint failed after the old reader drained: %v", err)
 	}
+	// The maintenance pass itself stays clean: the checkpoint retry lives in
+	// checkpoint health, never maintenance health.
 	lastSuccess, _, failures, err := d.MaintenanceHealth()
 	if lastSuccess.IsZero() || failures != 0 || err != nil {
 		t.Fatalf("successful retry reported maintenance failure: success=%s failures=%d err=%v", lastSuccess, failures, err)
+	}
+	cpOK, _, cpFailures, cpErr := d.CheckpointHealth()
+	if cpOK.IsZero() || cpFailures != 0 || cpErr != nil {
+		t.Fatalf("drained checkpoint not recorded clean in checkpoint health: ok=%s failures=%d err=%v", cpOK, cpFailures, cpErr)
 	}
 }
 
@@ -123,23 +129,32 @@ func TestMaintenanceCheckpointRetryExhaustionIsExplicitAndBounded(t *testing.T) 
 	d, repo := newBatchCacheTest(t)
 	rows := checkpointOldReader(t, d, repo)
 	defer rows.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	// A budget well short of the caller's deadline so the fold exhausts its own
+	// retry window rather than the whole pass timing out.
+	ctx, cancel := context.WithTimeout(t.Context(), checkpointRetryBudget+10*time.Second)
 	defer cancel()
 	before := testutil.ToFloat64(metrics.DuckDBCheckpointFailures)
 	started := time.Now()
-	err := d.runRepositoryMaintenance(ctx)
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "checkpoint retry budget exhausted") || !strings.Contains(err.Error(), "other write transactions active") {
-		t.Fatalf("exhausted checkpoint was hidden or mislabeled: %v", err)
+	// The reader never drains, so the fold exhausts its retry budget. Under the
+	// new contract that is a checkpoint failure, not a maintenance failure: the
+	// pass returns nil and the miss is retried on the compaction cycle.
+	if err := d.runRepositoryMaintenance(ctx); err != nil {
+		t.Fatalf("a missed checkpoint failed the whole maintenance pass: %v", err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("250ms retry budget was not bounded: %s", elapsed)
+	if elapsed := time.Since(started); elapsed > checkpointRetryBudget+5*time.Second {
+		t.Fatalf("checkpoint retry budget was not bounded: %s", elapsed)
 	}
 	if after := testutil.ToFloat64(metrics.DuckDBCheckpointFailures); after != before+1 {
 		t.Fatalf("attempts counted as logical checkpoint failures: before=%v after=%v", before, after)
 	}
-	_, _, failures, healthErr := d.MaintenanceHealth()
-	if failures != 1 || !errors.Is(healthErr, context.DeadlineExceeded) {
-		t.Fatalf("checkpoint exhaustion not reflected in maintenance health: failures=%d error=%v", failures, healthErr)
+	// Maintenance health stays clean; the exhausted fold is recorded only in
+	// checkpoint health, explicitly and with the pinned native diagnostic.
+	if _, _, maintFailures, maintErr := d.MaintenanceHealth(); maintFailures != 0 || maintErr != nil {
+		t.Fatalf("checkpoint miss leaked into maintenance health: failures=%d error=%v", maintFailures, maintErr)
+	}
+	_, _, cpFailures, cpErr := d.CheckpointHealth()
+	if cpFailures != 1 || cpErr == nil || !strings.Contains(cpErr.Error(), "checkpoint retry budget exhausted") || !strings.Contains(cpErr.Error(), "other write transactions active") {
+		t.Fatalf("exhausted checkpoint not recorded explicitly in checkpoint health: failures=%d error=%v", cpFailures, cpErr)
 	}
 }
 
@@ -182,6 +197,66 @@ func TestCheckpointRetriesConflictWithoutCountingTransientFailure(t *testing.T) 
 	}
 	if after := testutil.ToFloat64(metrics.DuckDBCheckpointFailures); after != before {
 		t.Fatalf("successful logical checkpoint counted retry attempts as errors: before=%v after=%v", before, after)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A checkpoint that fails inside a maintenance pass must leave maintenance
+// health clean and be recorded only in checkpoint health, so one missed fold
+// cannot degrade /readyz for an hour.
+func TestCheckpointMissDoesNotDegradeMaintenanceHealth(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectExec("CHECKPOINT").WillReturnError(errors.New("injected checkpoint failure"))
+	d := &Duck{DB: db, writeDB: db, repository: emptyRepository(t)}
+	if err := d.runRepositoryMaintenance(t.Context()); err != nil {
+		t.Fatalf("a missed checkpoint failed the whole maintenance pass: %v", err)
+	}
+	lastOK, _, maintFailures, maintErr := d.MaintenanceHealth()
+	if lastOK.IsZero() || maintFailures != 0 || maintErr != nil {
+		t.Fatalf("checkpoint miss leaked into maintenance health: lastOK=%s failures=%d err=%v", lastOK, maintFailures, maintErr)
+	}
+	_, cpAt, cpFailures, cpErr := d.CheckpointHealth()
+	if cpAt.IsZero() || cpFailures != 1 || cpErr == nil {
+		t.Fatalf("checkpoint miss not recorded in checkpoint health: at=%s failures=%d err=%v", cpAt, cpFailures, cpErr)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A missed fold stays pending and the next 10s compaction cycle retries it, so
+// a transient miss self-heals in seconds instead of waiting an hour. Driving
+// runParquetCompactionCycle directly proves the self-heal without a real clock.
+func TestMissedCheckpointRetriesOnCompactionCycle(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectExec("CHECKPOINT").WillReturnError(errors.New("injected checkpoint failure"))
+	mock.ExpectExec("CHECKPOINT").WillReturnResult(sqlmock.NewResult(0, 0))
+	d := &Duck{DB: db, writeDB: db, repository: emptyRepository(t)}
+	// A pass left a fold pending but could not complete it.
+	d.markCheckpointPending()
+	if _, err := d.runParquetCompactionCycle(t.Context()); err != nil {
+		t.Fatalf("compaction cycle surfaced the checkpoint miss as its own error: %v", err)
+	}
+	if _, _, cpFailures, cpErr := d.CheckpointHealth(); cpFailures != 1 || cpErr == nil {
+		t.Fatalf("first cycle did not record the miss: failures=%d err=%v", cpFailures, cpErr)
+	}
+	// The miss is still pending, so the next cycle retries and clears it.
+	if _, err := d.runParquetCompactionCycle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	lastOK, _, cpFailures, cpErr := d.CheckpointHealth()
+	if lastOK.IsZero() || cpFailures != 0 || cpErr != nil {
+		t.Fatalf("checkpoint did not self-heal on the compaction cycle: lastOK=%s failures=%d err=%v", lastOK, cpFailures, cpErr)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

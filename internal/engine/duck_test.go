@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -401,7 +402,10 @@ func TestMaintenanceRetriesRetiredDirectoryCleanup(t *testing.T) {
 	}
 }
 
-func TestMaintenanceTracksConsecutiveFailures(t *testing.T) {
+// Consecutive checkpoint failures accrue in checkpoint health, not maintenance
+// health, and a later success clears them. A missed fold must never fail the
+// maintenance pass, since it self-heals on the compaction cycle.
+func TestCheckpointTracksConsecutiveFailures(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -413,20 +417,56 @@ func TestMaintenanceTracksConsecutiveFailures(t *testing.T) {
 	mock.ExpectExec("CHECKPOINT").WillReturnResult(sqlmock.NewResult(0, 0))
 	d := &Duck{DB: db, writeDB: db, repository: emptyRepository(t)}
 	for range 3 {
-		if err := d.runRepositoryMaintenance(context.Background()); err == nil {
-			t.Fatal("maintenance succeeded despite checkpoint failure")
+		if err := d.runRepositoryMaintenance(context.Background()); err != nil {
+			t.Fatalf("checkpoint failure degraded the maintenance pass: %v", err)
 		}
 	}
-	_, _, failures, _ := d.MaintenanceHealth()
+	if _, _, maintFailures, maintErr := d.MaintenanceHealth(); maintFailures != 0 || maintErr != nil {
+		t.Fatalf("checkpoint failures leaked into maintenance health: failures=%d err=%v", maintFailures, maintErr)
+	}
+	_, _, failures, _ := d.CheckpointHealth()
 	if failures != 3 {
-		t.Fatalf("consecutive failures = %d, want 3", failures)
+		t.Fatalf("consecutive checkpoint failures = %d, want 3", failures)
 	}
 	if err := d.runRepositoryMaintenance(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	_, _, failures, _ = d.MaintenanceHealth()
+	_, _, failures, _ = d.CheckpointHealth()
 	if failures != 0 {
-		t.Fatalf("consecutive failures after recovery = %d, want 0", failures)
+		t.Fatalf("consecutive checkpoint failures after recovery = %d, want 0", failures)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Retention DELETEs on the rollup cache are real maintenance work: a failure
+// there still degrades maintenance health and consecutive-failure tracking,
+// while leaving checkpoint health clean when the fold itself succeeds.
+func TestRetentionFailureDegradesMaintenance(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, table := range []string{"service_rollup", "span_rollup", "log_rollup", "endpoint_rollup", "receiver_rollup", "resource_rollup", "receiver_entity_rollup", "edge_rollup"} {
+		e := mock.ExpectExec("DELETE FROM " + table)
+		if table == "service_rollup" {
+			e.WillReturnError(errors.New("injected retention failure"))
+		} else {
+			e.WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+	mock.ExpectExec("CHECKPOINT").WillReturnResult(sqlmock.NewResult(0, 0))
+	d := &Duck{DB: db, writeDB: db, repository: emptyRepository(t), cfg: config.Config{RetentionDays: 1}}
+	if err := d.runRepositoryMaintenance(context.Background()); err == nil || !strings.Contains(err.Error(), "injected retention failure") {
+		t.Fatalf("retention failure did not fail maintenance: %v", err)
+	}
+	if _, _, maintFailures, maintErr := d.MaintenanceHealth(); maintFailures != 1 || maintErr == nil {
+		t.Fatalf("retention failure not tracked in maintenance health: failures=%d err=%v", maintFailures, maintErr)
+	}
+	if _, _, cpFailures, cpErr := d.CheckpointHealth(); cpFailures != 0 || cpErr != nil {
+		t.Fatalf("retention failure leaked into checkpoint health: failures=%d err=%v", cpFailures, cpErr)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

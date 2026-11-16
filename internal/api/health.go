@@ -122,6 +122,7 @@ collect:
 
 	resp.Checks["data"] = h.checkDataDir()
 	resp.Checks["maintenance"] = h.checkMaintenance()
+	resp.Checks["checkpoint"] = h.checkCheckpoint()
 	resp.Checks["queries"] = h.checkQueries()
 	if h.oidc != nil {
 		resp.Checks["oidc"] = h.oidc.readiness()
@@ -362,6 +363,62 @@ func maintenanceResult(lastOK, lastAt time.Time, lastErr error, consecutiveFailu
 			res.Status = "degraded"
 			res.Detail = fmt.Sprintf("maintenance stale: last pass %s ago", since.Round(time.Second))
 		}
+	}
+	return res
+}
+
+// checkpointDegradeAfterFailures is how many rollup-cache checkpoint attempts
+// may fail in a row before readiness degrades. A missed fold is retried on the
+// 10s compaction cycle, so a transient conflict — an older reader that drains
+// within a second or two — clears after a cycle or two and never approaches
+// this count; the failure counter resets to zero on the next success. Reaching
+// this many failures is roughly a minute of continuous refusal, i.e. a fold
+// that is genuinely stuck (a reader that never drains) and whose WAL is growing
+// unbounded — worth surfacing. A single recent miss stays ok, so one transient
+// conflict does not flap /readyz out of rotation. A genuinely wedged engine is
+// caught independently by the telemetry SELECT-1 probe, not here.
+const checkpointDegradeAfterFailures = 6
+
+// checkCheckpoint surfaces the rollup-cache checkpoint's own health, separately
+// from maintenance. A checkpoint folds the write-ahead log back into the cache
+// file; the non-FORCE form refuses while a read that began before the last
+// write commit is still open. That refusal is transient and self-heals on the
+// 10s compaction cycle, so it reports "degraded" (never "unhealthy", and only
+// after the fold has kept failing past checkpointDegradeAfterFailures) rather
+// than pulling the instance from rotation: ingest and queries work while the
+// WAL merely grows, and a restart would not help.
+func (h *HealthHandler) checkCheckpoint() CheckResult {
+	if h.duck == nil {
+		return CheckResult{
+			Status: "unhealthy",
+			Error:  "duckdb not initialized",
+		}
+	}
+	lastOK, lastAt, failures, lastErr := h.duck.CheckpointHealth()
+	return checkpointResult(lastOK, lastAt, lastErr, failures)
+}
+
+// checkpointResult classifies checkpoint health. It is pure so every branch —
+// never attempted, a transient miss, and a persistently failing fold — is
+// unit-testable without a running Duck.
+func checkpointResult(lastOK, lastAt time.Time, lastErr error, consecutiveFailures int) CheckResult {
+	res := CheckResult{Status: "ok"}
+	if !lastAt.IsZero() {
+		res.UpdatedAt = lastAt.UTC().Format(time.RFC3339)
+	}
+	if lastErr == nil {
+		// The last fold succeeded, or none has been attempted yet.
+		return res
+	}
+	res.Error = lastErr.Error()
+	res.Detail = fmt.Sprintf("%d consecutive failed checkpoints", consecutiveFailures)
+	if !lastOK.IsZero() {
+		res.Detail += "; last clean fold: " + lastOK.UTC().Format(time.RFC3339)
+	}
+	// Tolerate a transient miss: the 10s cycle retries, so degrade only once the
+	// fold has failed enough times in a row that a retry would have cleared it.
+	if consecutiveFailures >= checkpointDegradeAfterFailures {
+		res.Status = "degraded"
 	}
 	return res
 }

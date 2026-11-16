@@ -387,6 +387,39 @@ func TestMaintenanceStaleThreshold(t *testing.T) {
 	}
 }
 
+// A single transient checkpoint miss — retried every 10s — must not degrade
+// readiness, while a fold that keeps failing past the cadence must. Checkpoint
+// health never reports unhealthy: the instance still serves while the WAL grows.
+func TestReadinessToleratesTransientCheckpointMiss(t *testing.T) {
+	now := time.Now()
+	boom := errors.New("Cannot CHECKPOINT: there are other write transactions active")
+	cases := []struct {
+		name           string
+		lastOK, lastAt time.Time
+		lastErr        error
+		failures       int
+		wantStatus     string
+	}{
+		{"never attempted", time.Time{}, time.Time{}, nil, 0, "ok"},
+		{"clean fold", now.Add(-30 * time.Second), now.Add(-30 * time.Second), nil, 0, "ok"},
+		{"single transient miss", now.Add(-time.Minute), now.Add(-5 * time.Second), boom, 1, "ok"},
+		{"a few misses still tolerated", now.Add(-time.Minute), now.Add(-5 * time.Second), boom, 3, "ok"},
+		{"persistently failing fold", now.Add(-2 * time.Minute), now.Add(-5 * time.Second), boom, checkpointDegradeAfterFailures, "degraded"},
+		{"never succeeded, still failing", time.Time{}, now.Add(-time.Second), boom, checkpointDegradeAfterFailures + 2, "degraded"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := checkpointResult(c.lastOK, c.lastAt, c.lastErr, c.failures)
+			if res.Status != c.wantStatus {
+				t.Fatalf("status = %q, want %q (detail=%q err=%q)", res.Status, c.wantStatus, res.Detail, res.Error)
+			}
+			if res.Status == "unhealthy" {
+				t.Fatalf("checkpoint must never report unhealthy: %+v", res)
+			}
+		})
+	}
+}
+
 func TestMaintenanceResult(t *testing.T) {
 	now := time.Now()
 	rollupEvery := 60 * time.Second
