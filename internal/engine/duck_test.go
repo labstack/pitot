@@ -147,6 +147,47 @@ func TestNewDuckReconnectsInUTCAfterStartupContextCancelled(t *testing.T) {
 	}
 }
 
+// Every pooled read connection must enable parquet_metadata_cache so repeated
+// statements over the same immutable files reuse their footers instead of
+// re-reading them. The setting is applied per connection and kept in the policy
+// allowed_configs, so it must also hold on a connection opened after the
+// configuration lock, and the lock must still refuse other configuration.
+func TestReadConnectionsEnableParquetMetadataCache(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Config{DataDir: t.TempDir(), DuckDBMemory: "128MB", DuckDBThreads: 2, DuckDBMaxConns: 4}
+	repository, err := telemetrystore.Open(cfg.TelemetryDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	d, err := NewDuck(ctx, cfg, repository)
+	if err != nil {
+		t.Fatalf("NewDuck() error = %v", err)
+	}
+	defer d.Close()
+
+	for name, db := range map[string]*sql.DB{"read": d.DB, "write": d.writeDB, "memory": d.memoryDB, "parse": d.parseDB} {
+		t.Run(name, func(t *testing.T) {
+			// Retire idle connections so this query runs on a freshly opened one,
+			// whose init hook runs after the configuration was locked.
+			db.SetMaxIdleConns(0)
+			var enabled bool
+			if err := db.QueryRowContext(ctx, "SELECT current_setting('parquet_metadata_cache')::BOOLEAN").Scan(&enabled); err != nil {
+				t.Fatal(err)
+			}
+			if !enabled {
+				t.Fatalf("parquet_metadata_cache = false on a %s connection, want true", name)
+			}
+		})
+	}
+
+	// The lock still refuses configuration outside allowed_configs, so public SQL
+	// cannot re-open file or external access.
+	if _, err := d.DB.ExecContext(ctx, "SET enable_external_access=true"); err == nil {
+		t.Fatal("expected locked configuration to refuse SET enable_external_access")
+	}
+}
+
 // A cancelled statement's interrupt can reach the ROLLBACK that ends its read
 // transaction, leaving the transaction open. The read must roll back itself
 // after cancellation, and a connection whose rollback failed must leave the
