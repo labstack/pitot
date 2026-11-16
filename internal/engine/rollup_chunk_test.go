@@ -94,3 +94,60 @@ func TestServiceRollupChunkGrowsOnlyAfterCommittedPasses(t *testing.T) {
 		t.Fatalf("%d out-of-memory passes against %d committed ones", ooms, worked)
 	}
 }
+
+// Issue #481: once a committed streak had grown the window back into a size
+// that ran out of memory, doubling straight into that same size made a dense
+// region fail roughly every fourth pass forever. The window must remember the
+// failing size as a ceiling and never climb back to or past it.
+func TestServiceRollupChunkDoesNotGrowBackIntoFailingSize(t *testing.T) {
+	var c rollupChunk
+	c.next(false, errRollupOOM) // unbounded -> 30m
+	c.next(false, errRollupOOM) // 30m -> 15m
+	failing := 2 * c.size       // 30m: the window a committed streak grows into
+
+	// Grow back up into the failing window.
+	for c.size < failing {
+		for range rollupChunkWins {
+			c.next(true, nil)
+		}
+	}
+	if c.size != failing {
+		t.Fatalf("grew to %v, want %v", time.Duration(c.size), time.Duration(failing))
+	}
+
+	// The regrown window runs out of memory: that size is now known too large.
+	c.next(false, errRollupOOM)
+
+	// No committed streak, however long, may climb back to or past it, nor
+	// snap to the unbounded window above it.
+	for range 100 {
+		c.next(true, nil)
+		if c.size == 0 || c.size >= failing {
+			t.Fatalf("grew back to %v (failing size %v); the ceiling was ignored",
+				time.Duration(c.size), time.Duration(failing))
+		}
+	}
+}
+
+// The remembered ceiling survives the shrink-and-grow cycle: a committed
+// streak settles at the largest known-safe window rather than oscillating in
+// and out of the size that keeps failing.
+func TestServiceRollupChunkSettlesBelowRememberedCeiling(t *testing.T) {
+	var c rollupChunk
+	c.next(false, errRollupOOM) // unbounded -> 30m
+	c.next(false, errRollupOOM) // 30m -> 15m
+	for range rollupChunkWins {
+		c.next(true, nil) // 15m -> 30m
+	}
+	if time.Duration(c.size) != 30*time.Minute {
+		t.Fatalf("grew to %v, want 30m before it fails", time.Duration(c.size))
+	}
+	c.next(false, errRollupOOM) // 30m fails -> ceiling 30m, window 15m
+
+	for range 50 {
+		c.next(true, nil)
+	}
+	if got := time.Duration(c.size); got != 15*time.Minute {
+		t.Fatalf("settled at %v, want 15m held just below the 30m ceiling", got)
+	}
+}
