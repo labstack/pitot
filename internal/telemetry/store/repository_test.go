@@ -668,6 +668,11 @@ func TestRepositoryRecoversInterruptedCompactionSwap(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The crashed process exits, releasing its data-directory lock while the
+	// marker, staged output, and retired inputs stay on disk for recovery.
+	if err := repository.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	recovered, err := Open(dir)
 	if err != nil {
@@ -915,6 +920,37 @@ func TestUnresolvedCompactionRunbookExists(t *testing.T) {
 		}
 	}
 	t.Fatalf("runbook anchor %q is not a section in %s; sections are %v", anchor, guide, headings)
+}
+
+// A live repository owns its data directory exclusively: it deletes, renames,
+// and rewrites files there with no cross-process coordination. A second process
+// opened on the same directory must fail fast rather than race the first into
+// corruption, and the hold must end at Close so the normal reopen path works.
+func TestOpenRejectsSecondProcessOnSameDataDir(t *testing.T) {
+	dir := t.TempDir()
+	first, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(dir)
+	if err == nil {
+		_ = second.Close()
+		_ = first.Close()
+		t.Fatal("second Open succeeded while the first still held the data directory")
+	}
+	if !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "another process") {
+		t.Fatalf("lock error must name the data directory and another process: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen after Close: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f testParquetPublisherFunc) PublishParquetReplacement(ctx context.Context, _ telemetry.BatchMetadata, _ []string, publish func(context.Context) error) error {

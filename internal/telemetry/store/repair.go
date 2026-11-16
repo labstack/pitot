@@ -29,6 +29,13 @@ type BatchIssue struct {
 // large set uses the machine while no query grows with it; GOMAXPROCS bounds
 // both. Issues keep directory order.
 func VerifyBatches(root string) ([]BatchIssue, error) {
+	// Refuse to run against a live data directory: a running store can retire
+	// and rewrite batches underneath the verifier and produce false reports.
+	lock, err := acquireDataDirLock(root)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
 	batchesDir := filepath.Join(root, "parquet", "batches")
 	entries, err := os.ReadDir(batchesDir)
 	if err != nil {
@@ -87,6 +94,13 @@ func VerifyBatches(root string) ([]BatchIssue, error) {
 // are refused. The returned directory remains beside the authoritative set so
 // an operator can recover it from a backup or rename it back after repair.
 func QuarantineBatch(root, id string) (string, error) {
+	// Refuse to rename batches out from under a live store, which has no
+	// cross-process coordination with this command.
+	lock, err := acquireDataDirLock(root)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Close()
 	return quarantineBatch(root, id, telemetry.ValidatePublishedBatch)
 }
 
