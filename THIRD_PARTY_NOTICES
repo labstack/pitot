@@ -79,15 +79,16 @@ COMPONENT INVENTORY
 - npm: @ag-ui/encoder 1.0.4 (declared license: MIT)
 - npm: @ag-ui/proto 1.0.4 (declared license: MIT)
 - npm: @bufbuild/protobuf 2.16.0 (declared license: (Apache-2.0 AND BSD-3-Clause)); no license file was present in the installed package
-- npm: @codemirror/autocomplete 6.20.3 (declared license: MIT)
+- npm: @codemirror/autocomplete 6.20.4 (declared license: MIT)
 - npm: @codemirror/commands 6.11.1 (declared license: MIT)
 - npm: @codemirror/lang-sql 6.10.0 (declared license: MIT)
-- npm: @codemirror/language 6.12.4 (declared license: MIT)
+- npm: @codemirror/language 6.13.1 (declared license: MIT)
 - npm: @codemirror/lint 6.9.7 (declared license: MIT)
 - npm: @codemirror/state 6.7.6 (declared license: MIT)
-- npm: @codemirror/view 6.43.13 (declared license: MIT)
-- npm: @dagrejs/dagre 3.1.1 (declared license: MIT)
-- npm: @dagrejs/graphlib 4.0.5 (declared license: MIT)
+- npm: @codemirror/streamparser 6.0.0 (declared license: MIT)
+- npm: @codemirror/view 6.43.15 (declared license: MIT)
+- npm: @dagrejs/dagre 3.1.3 (declared license: MIT)
+- npm: @dagrejs/graphlib 4.0.6 (declared license: MIT)
 - npm: @floating-ui/core 1.8.0 (declared license: MIT)
 - npm: @floating-ui/dom 1.8.0 (declared license: MIT)
 - npm: @floating-ui/react 0.27.20 (declared license: MIT)
@@ -99,19 +100,19 @@ COMPONENT INVENTORY
 - npm: @lezer/common 1.5.3 (declared license: MIT)
 - npm: @lezer/highlight 1.2.5 (declared license: MIT)
 - npm: @lezer/lr 1.4.11 (declared license: MIT)
-- npm: @mantine/core 9.7.2 (declared license: MIT)
-- npm: @mantine/hooks 9.7.2 (declared license: MIT)
+- npm: @mantine/core 9.8.0 (declared license: MIT)
+- npm: @mantine/hooks 9.8.0 (declared license: MIT)
 - npm: @marijn/find-cluster-break 1.0.4 (declared license: MIT)
-- npm: @modelcontextprotocol/client 2.3.1 (declared license: Apache-2.0)
-- npm: @modelcontextprotocol/core 2.3.1 (declared license: Apache-2.0)
-- npm: @modelcontextprotocol/ext-apps 2.0.3 (declared license: MIT)
-- npm: @oxc-project/types 0.153.0 (declared license: MIT)
+- npm: @modelcontextprotocol/client 2.4.0 (declared license: Apache-2.0)
+- npm: @modelcontextprotocol/core 2.4.0 (declared license: Apache-2.0)
+- npm: @modelcontextprotocol/ext-apps 2.0.4 (declared license: MIT)
+- npm: @oxc-project/types 0.156.0 (declared license: MIT)
 - npm: @phosphor-icons/react 2.1.10 (declared license: MIT)
 - npm: @protobuf-ts/protoc 2.11.1 (declared license: Apache-2.0)
 - npm: @standard-schema/spec 1.1.0 (declared license: MIT)
 - npm: @tanstack/history 1.162.5 (declared license: MIT)
-- npm: @tanstack/query-core 5.104.2 (declared license: MIT)
-- npm: @tanstack/react-query 5.104.2 (declared license: MIT)
+- npm: @tanstack/query-core 5.107.1 (declared license: MIT)
+- npm: @tanstack/react-query 5.107.1 (declared license: MIT)
 - npm: @tanstack/react-router 1.170.46 (declared license: MIT)
 - npm: @tanstack/react-store 0.11.2 (declared license: MIT)
 - npm: @tanstack/react-table 9.3.1 (declared license: MIT)
@@ -174,7 +175,7 @@ COMPONENT INVENTORY
 - npm: jiti 2.7.0 (declared license: MIT)
 - npm: jose 6.2.12 (declared license: MIT)
 - npm: js-tokens 4.0.0 (declared license: MIT)
-- npm: knip 6.41.0 (declared license: ISC)
+- npm: knip 6.45.1 (declared license: ISC)
 - npm: longest-streak 3.1.0 (declared license: MIT)
 - npm: loose-envify 1.4.0 (declared license: MIT)
 - npm: markdown-table 3.0.4 (declared license: MIT)
@@ -224,7 +225,7 @@ COMPONENT INVENTORY
 - npm: micromark-util-types 2.0.3 (declared license: MIT)
 - npm: ms 2.1.3 (declared license: MIT)
 - npm: object-assign 4.1.1 (declared license: MIT)
-- npm: oxc-parser 0.153.0 (declared license: MIT)
+- npm: oxc-parser 0.156.0 (declared license: MIT)
 - npm: oxc-resolver 11.24.2 (declared license: MIT)
 - npm: package-manager-detector 1.9.0 (declared license: MIT)
 - npm: parse-entities 4.0.2 (declared license: MIT)
@@ -233,8 +234,8 @@ COMPONENT INVENTORY
 - npm: pkce-challenge 5.0.1 (declared license: MIT)
 - npm: prop-types 15.8.1 (declared license: MIT)
 - npm: property-information 7.2.0 (declared license: MIT)
-- npm: react 19.3.0 (declared license: MIT)
-- npm: react-dom 19.3.0 (declared license: MIT)
+- npm: react 19.3.1 (declared license: MIT)
+- npm: react-dom 19.3.1 (declared license: MIT)
 - npm: react-draggable 4.7.2 (declared license: MIT)
 - npm: react-grid-layout 2.3.0 (declared license: MIT)
 - npm: react-is 16.13.1 (declared license: MIT)
@@ -256,7 +257,7 @@ COMPONENT INVENTORY
 - npm: seroval-plugins 1.7.6 (declared license: MIT)
 - npm: shebang-command 2.0.0 (declared license: MIT)
 - npm: shebang-regex 3.0.0 (declared license: MIT)
-- npm: smol-toml 1.9.0 (declared license: BSD-3-Clause)
+- npm: smol-toml 1.9.1 (declared license: BSD-3-Clause)
 - npm: space-separated-tokens 2.0.2 (declared license: MIT)
 - npm: stringify-entities 4.0.4 (declared license: MIT)
 - npm: strip-json-comments 5.0.3 (declared license: MIT)
@@ -271,7 +272,7 @@ COMPONENT INVENTORY
 - npm: tslib 2.3.0 (declared license: 0BSD)
 - npm: tslib 2.8.1 (declared license: 0BSD)
 - npm: type-fest 5.10.0 (declared license: (MIT OR CC0-1.0))
-- npm: unbash 5.1.0 (declared license: ISC)
+- npm: unbash 6.0.4 (declared license: ISC)
 - npm: unified 11.0.5 (declared license: MIT)
 - npm: unist-util-is 6.0.1 (declared license: MIT)
 - npm: unist-util-position 5.0.0 (declared license: MIT)
@@ -7320,13 +7321,14 @@ dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 
 --- Applies to -------------------------------------------------------------
-- npm: @codemirror/autocomplete 6.20.3 / LICENSE
+- npm: @codemirror/autocomplete 6.20.4 / LICENSE
 - npm: @codemirror/commands 6.11.1 / LICENSE
 - npm: @codemirror/lang-sql 6.10.0 / LICENSE
-- npm: @codemirror/language 6.12.4 / LICENSE
+- npm: @codemirror/language 6.13.1 / LICENSE
 - npm: @codemirror/lint 6.9.7 / LICENSE
 - npm: @codemirror/state 6.7.6 / LICENSE
-- npm: @codemirror/view 6.43.13 / LICENSE
+- npm: @codemirror/streamparser 6.0.0 / LICENSE
+- npm: @codemirror/view 6.43.15 / LICENSE
 ----------------------------------------------------------------------------
 
 MIT License
@@ -7352,8 +7354,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- npm: @dagrejs/dagre 3.1.1 / LICENSE
-- npm: @dagrejs/graphlib 4.0.5 / LICENSE
+- npm: @dagrejs/dagre 3.1.3 / LICENSE
+- npm: @dagrejs/graphlib 4.0.6 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright (c) 2012-2014 Chris Pettitt
@@ -7656,8 +7658,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- npm: @mantine/core 9.7.2 / LICENSE
-- npm: @mantine/hooks 9.7.2 / LICENSE
+- npm: @mantine/core 9.8.0 / LICENSE
+- npm: @mantine/hooks 9.8.0 / LICENSE
 ----------------------------------------------------------------------------
 
 MIT License
@@ -7709,9 +7711,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- npm: @modelcontextprotocol/client 2.3.1 / LICENSE
-- npm: @modelcontextprotocol/core 2.3.1 / LICENSE
-- npm: @modelcontextprotocol/ext-apps 2.0.3 / LICENSE
+- npm: @modelcontextprotocol/client 2.4.0 / LICENSE
+- npm: @modelcontextprotocol/core 2.4.0 / LICENSE
+- npm: @modelcontextprotocol/ext-apps 2.0.4 / LICENSE
 ----------------------------------------------------------------------------
 
 The MCP project is undergoing a licensing transition from the MIT License to the Apache License, Version 2.0 ("Apache-2.0"). All new code and specification contributions to the project are licensed under Apache-2.0. Documentation contributions (excluding specifications) are licensed under CC-BY-4.0.
@@ -7932,8 +7934,8 @@ CC-BY-4.0. See https://creativecommons.org/licenses/by/4.0/legalcode for
 the full license text.
 
 --- Applies to -------------------------------------------------------------
-- npm: @oxc-project/types 0.153.0 / LICENSE
-- npm: oxc-parser 0.153.0 / LICENSE
+- npm: @oxc-project/types 0.156.0 / LICENSE
+- npm: oxc-parser 0.156.0 / LICENSE
 - npm: oxc-resolver 11.24.2 / LICENSE
 ----------------------------------------------------------------------------
 
@@ -8014,8 +8016,8 @@ SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
 - npm: @tanstack/history 1.162.5 / LICENSE
-- npm: @tanstack/query-core 5.104.2 / LICENSE
-- npm: @tanstack/react-query 5.104.2 / LICENSE
+- npm: @tanstack/query-core 5.107.1 / LICENSE
+- npm: @tanstack/react-query 5.107.1 / LICENSE
 - npm: @tanstack/react-router 1.170.46 / LICENSE
 - npm: @tanstack/router-core 1.171.39 / LICENSE
 ----------------------------------------------------------------------------
@@ -9246,7 +9248,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- npm: knip 6.41.0 / LICENSE
+- npm: knip 6.45.1 / LICENSE
 ----------------------------------------------------------------------------
 
 ISC License (ISC)
@@ -9575,8 +9577,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- npm: react 19.3.0 / LICENSE
-- npm: react-dom 19.3.0 / LICENSE
+- npm: react 19.3.1 / LICENSE
+- npm: react-dom 19.3.1 / LICENSE
 - npm: scheduler 0.28.0 / LICENSE
 - npm: use-sync-external-store 1.7.0 / LICENSE
 ----------------------------------------------------------------------------
@@ -10101,7 +10103,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- npm: smol-toml 1.9.0 / LICENSE
+- npm: smol-toml 1.9.1 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright (c) Squirrel Chat et al., All rights reserved.
@@ -10430,7 +10432,7 @@ express Statement of Purpose.
     this CC0 or use of the Work.
 
 --- Applies to -------------------------------------------------------------
-- npm: unbash 5.1.0 / LICENSE
+- npm: unbash 6.0.4 / LICENSE
 ----------------------------------------------------------------------------
 
 ISC License
