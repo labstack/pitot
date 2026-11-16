@@ -987,17 +987,26 @@ func (p *ParquetStore) PublishReplacement(stage string, metadata BatchMetadata, 
 		// output is durable; until then marker recovery retries the fsync.
 		retired := make([]BatchMetadata, 0, len(inputs))
 		p.mu.Lock()
+		// Retire the inputs and install the output as one catalog edit. Each
+		// setBatchLocked would otherwise republish the snapshot per batch, and a
+		// lock-free reader that captured BatchMetadata between the input removals
+		// and the output install would build its file list from a catalog that
+		// has already lost a whole compaction group but not yet gained its
+		// replacement, under-counting rows that are conserved by the swap (#499).
 		for _, id := range inputs {
 			if batch, exists := p.batches[id]; exists {
 				retired = append(retired, batch.metadata)
 			}
-			p.setBatchLocked(id, nil)
+			p.setBatchLockedNoPublish(id, nil)
 		}
-		p.setBatchLocked(metadata.ID, replacement)
+		p.setBatchLockedNoPublish(metadata.ID, replacement)
 		// Whether or not the fsync succeeded, the output's replaces list now
 		// covers its inputs: a retried commit of one must neither adopt its
 		// directory nor write it again once it is deleted.
 		p.recordReplacesLocked(metadata.ID, inputs)
+		// A single publish exposes the pre-swap or post-swap catalog, never one
+		// of the intermediate states the per-batch mutations stepped through.
+		p.publishBatchesLocked()
 		p.mu.Unlock()
 		// Count catalog retirements once, even if marker cleanup or fsync is
 		// retried. Already absent inputs must not inflate retirement throughput.

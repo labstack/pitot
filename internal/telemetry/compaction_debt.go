@@ -65,9 +65,13 @@ func (p *ParquetStore) changeGeneration0Locked(b BatchMetadata, delta int) {
 	}
 }
 
-// setBatchLocked is the sole live-catalog mutation. Replacement, restoration,
-// rollback, startup and retention all use the same inventory accounting.
-func (p *ParquetStore) setBatchLocked(id string, batch *storedBatch) {
+// setBatchLockedNoPublish mutates the live catalog and its inventory accounting
+// without republishing the reader snapshot or firing the debt gate. A caller
+// that changes several batches as one logical step takes mu, calls this for
+// each, then publishes once with publishBatchesLocked, so lock-free readers
+// never observe an intermediate catalog. The generation-0 snapshot it stores is
+// a backlog gauge, not query state, so leaving it per-mutation is harmless.
+func (p *ParquetStore) setBatchLockedNoPublish(id string, batch *storedBatch) {
 	if old := p.batches[id]; old != nil {
 		p.changeGeneration0Locked(old.metadata, -1)
 	}
@@ -78,11 +82,25 @@ func (p *ParquetStore) setBatchLocked(id string, batch *storedBatch) {
 		p.changeGeneration0Locked(batch.metadata, 1)
 	}
 	p.generation0Snapshot.Store(int64(p.generation0Batches))
+}
+
+// publishBatchesLocked republishes the canonical reader snapshot and wakes a
+// waiter once debt has crossed its limit. It is the single publish step that
+// follows one or more setBatchLockedNoPublish mutations under mu.
+func (p *ParquetStore) publishBatchesLocked() {
 	p.publishMetadataLocked()
 	if p.compactionDebt >= CompactionDebtLimit && p.debtLimitReached != nil {
 		close(p.debtLimitReached)
 		p.debtLimitReached = nil
 	}
+}
+
+// setBatchLocked is the sole single-batch live-catalog mutation. Commit,
+// restoration, rollback, startup and retention all use the same inventory
+// accounting and publish the new catalog atomically on every call.
+func (p *ParquetStore) setBatchLocked(id string, batch *storedBatch) {
+	p.setBatchLockedNoPublish(id, batch)
+	p.publishBatchesLocked()
 }
 
 // WaitForCompactionLimit wakes higher-generation work when ingest needs the
