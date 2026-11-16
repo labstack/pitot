@@ -35,7 +35,7 @@ func TestMetricPhysicalRowKeepsFidelityColumns(t *testing.T) {
 }
 
 func TestFormatThreeIsRefusedBeforeCleanup(t *testing.T) {
-	for _, suffix := range []string{BatchSuffix, ".retired", ".retired-replacement"} {
+	for _, suffix := range []string{BatchSuffix, ".retired"} {
 		t.Run(suffix, func(t *testing.T) {
 			root := t.TempDir()
 			store, err := OpenParquetStore(root)
@@ -161,7 +161,7 @@ func TestFormatFiveRequiresMetricPhysicalSchema(t *testing.T) {
 }
 
 func TestPartiallyRemovedRetiredBatchDoesNotStopOpen(t *testing.T) {
-	for _, suffix := range []string{".retired", ".retired-replacement"} {
+	for _, suffix := range []string{".retired"} {
 		for _, missing := range []string{"spans.parquet", "logs.parquet", "metrics.parquet", "trace.fidx", "metadata.json"} {
 			t.Run(suffix+"/"+missing, func(t *testing.T) {
 				root := t.TempDir()

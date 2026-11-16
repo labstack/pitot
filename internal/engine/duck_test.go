@@ -421,7 +421,7 @@ func TestMaintenanceRetriesRetiredDirectoryCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer repository.Close()
-	retired := filepath.Join(repository.Parquet.BatchesDir(), "stale.retired-old")
+	retired := filepath.Join(repository.Parquet.BatchesDir(), "stale.retired")
 	if err := os.Mkdir(retired, 0o755); err != nil {
 		t.Fatal(err)
 	}

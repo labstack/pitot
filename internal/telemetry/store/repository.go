@@ -2,10 +2,8 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,14 +55,16 @@ func Open(root string) (*Repository, error) {
 		return nil, err
 	}
 	r := &Repository{root: root, Parquet: parquetStore, lock: lock}
-	if err := r.recoverCompaction(context.Background(), func(ctx context.Context, _ telemetry.BatchMetadata, _ []string, publish func(context.Context) error) error {
-		return publish(ctx)
-	}); err != nil {
-		r.logUnresolvedCompaction(err)
-		_ = r.Close()
-		return nil, fmt.Errorf("recover Parquet compaction (unresolved marker at %s): %w",
-			filepath.Join(root, "COMPACTION.json"), err)
-	}
+	// Compaction has no durable marker and no boot-time rollback. A compaction
+	// is purely in-process: it merges into compaction/<output> staging and
+	// commits by renaming that into the batch namespace, where the output's
+	// replaces.json retires its inputs. So the entire recovery protocol is to
+	// discard the staging directory and let replaces.json decide. A crash
+	// before the rename leaves the inputs live as .batch and the staging is
+	// dropped here; a crash after it leaves the output present with its
+	// replaces.json, which loadBatches has already applied to retire the
+	// inputs. Either way the on-disk state is consistent and nothing refuses
+	// to start.
 	if err := r.cleanupCompactionArtifacts(); err != nil {
 		_ = r.Close()
 		return nil, fmt.Errorf("clean Parquet compaction staging: %w", err)
@@ -88,49 +88,13 @@ func Open(root string) (*Repository, error) {
 	return r, nil
 }
 
-// compactionRunbookURL is the manual rollback procedure. The startup log links
-// to it rather than restating it, because the procedure has preconditions that
-// are refined as the failure modes are understood, and a copy here drifts from
-// the guide silently — each revision so far has corrected one location and left
-// the other saying something the code no longer guarantees. Guidance an
-// operator can act on wrongly is worse than guidance in one place they have to
-// open. TestUnresolvedCompactionRunbookExists keeps the link honest.
-const compactionRunbookURL = "https://pitot.dev/docs/guides/troubleshooting#an-unresolved-compaction-blocks-startup"
-
-// logUnresolvedCompaction spells out the operator's options for a marker that
-// blocks startup.
-//
-// Refusing to boot is only the safe half of the decision. A marker names the
-// retired inputs a rollback still needs, and those directories hold the only
-// copy of the rows the compaction was merging, so a startup that guessed at
-// the rollback set could delete them — which is why recovery fails closed. The
-// other half is saying where to look, because the reachable next step for an
-// instance that will not start is rm -rf of the data directory, and that
-// destroys exactly what failing closed preserved.
-//
-// The guidance is logged rather than wrapped into the error: the paths and the
-// ordering constraint do not fit an error string that composes, and the
-// rollback warning is the kind of thing an operator has to be able to read
-// once, in full, at the moment the process refuses to come up.
-func (r *Repository) logUnresolvedCompaction(err error) {
-	slog.Error("Parquet compaction is unresolved; Pitot will not start",
-		"err", err,
-		"marker", filepath.Join(r.root, "COMPACTION.json"),
-		"compaction_staging", filepath.Join(r.root, "compaction"),
-		"retired_inputs", r.Parquet.BatchesDir(),
-		"preserved_state", "the live marker is retained and startup cleanup will not run after this failure",
-		"retry", "clear the underlying cause and start again; recovery re-runs on its own",
-		"runbook", compactionRunbookURL,
-		"warning", "deleting the marker on its own is not a rollback; cleanup then treats the retired inputs as reclaimable and removes them")
-}
-
-// cleanupCompactionArtifacts drops staging left after compaction recovery has
-// completed and consumed its live marker.
+// cleanupCompactionArtifacts discards the compaction staging directory on
+// boot. A compaction that did not commit never renamed its staging into the
+// batch namespace, so the staging holds no authoritative rows; one that did
+// commit already left the output in the namespace, so the staging is spent.
+// Dropping it is the whole boot-time recovery for compaction.
 func (r *Repository) cleanupCompactionArtifacts() error {
 	if err := os.RemoveAll(filepath.Join(r.root, "compaction")); err != nil {
-		return err
-	}
-	if err := os.Remove(filepath.Join(r.root, "COMPACTION.json.tmp")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return syncDirectory(r.root)
@@ -170,11 +134,11 @@ func (r *Repository) CollectRetiredParquet() (int, error) {
 	return r.Parquet.CollectRetired()
 }
 
+// cleanupRetired reclaims retention's <id>.retired directories whose removal
+// was interrupted after the rename. Compaction no longer produces any retired
+// directory of its own: it retires inputs through each output's replaces.json,
+// and CollectRetired deletes those input directories in place.
 func (r *Repository) cleanupRetired() error {
-	protected, err := r.protectedRetiredSuffix()
-	if err != nil {
-		return err
-	}
 	entries, err := os.ReadDir(r.Parquet.BatchesDir())
 	if err != nil {
 		return err
@@ -183,16 +147,7 @@ func (r *Repository) cleanupRetired() error {
 	var cleanupErr error
 	for _, entry := range entries {
 		name := entry.Name()
-		if !entry.IsDir() || strings.HasSuffix(name, telemetry.BatchSuffix) || !strings.Contains(name, ".retired") {
-			continue
-		}
-		// The live marker is the only thing that makes a retired directory
-		// unreclaimable, and it protects exactly one output's inputs. So
-		// removing COMPACTION.json without first renaming its
-		// <id>.retired-<output id> directories back to <id>.batch does not
-		// roll the compaction back — it makes the rows here deletable, and
-		// this loop deletes them on the next pass.
-		if protected != "" && strings.HasSuffix(name, protected) {
+		if !entry.IsDir() || !strings.HasSuffix(name, ".retired") {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(r.Parquet.BatchesDir(), name)); err != nil {
@@ -205,26 +160,6 @@ func (r *Repository) cleanupRetired() error {
 		cleanupErr = errors.Join(cleanupErr, syncDirectory(r.Parquet.BatchesDir()))
 	}
 	return cleanupErr
-}
-
-// protectedRetiredSuffix names the retired-input set a live compaction marker
-// may still need. An unreadable marker fails cleanup closed.
-func (r *Repository) protectedRetiredSuffix() (string, error) {
-	data, err := os.ReadFile(filepath.Join(r.root, "COMPACTION.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	var marker compactionMarker
-	if err := json.Unmarshal(data, &marker); err != nil {
-		return "", fmt.Errorf("read live compaction marker: %w", err)
-	}
-	if err := validateCompactionMarker(marker); err != nil {
-		return "", err
-	}
-	return ".retired-" + marker.Output.ID, nil
 }
 
 // beginPublication reserves a strictly increasing attempt stamp before any row

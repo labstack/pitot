@@ -68,11 +68,6 @@ const (
 	maxDayCompactionRows int64 = 250_000
 )
 
-type compactionMarker struct {
-	Output telemetry.BatchMetadata `json:"output"`
-	Inputs []string                `json:"inputs"`
-}
-
 // compactionAttemptFile records that a merge was started. The completion
 // marker is written only after PrepareReplacement, so a process killed during
 // the merge -- which is the likely way a large merge ends -- leaves no trace
@@ -172,14 +167,6 @@ func (r *Repository) compactParquet(ctx context.Context, publisher ParquetPublis
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	markerPath := filepath.Join(r.root, "COMPACTION.json")
-	if exists, err := pathExists(markerPath); err != nil {
-		return 0, err
-	} else if exists {
-		if err := r.recoverCompaction(ctx, publisher.PublishParquetReplacement); err != nil {
-			return 0, fmt.Errorf("recover pending Parquet compaction: %w", err)
-		}
-	}
 	// A pass that was killed mid-merge left a record of how much it tried to
 	// take. Take less.
 	batchCap := compactionBatchCap(maxBatches, readCompactionAttempt(r.root))
@@ -197,21 +184,21 @@ func (r *Repository) compactParquet(ctx context.Context, publisher ParquetPublis
 		ID: fmt.Sprintf("compact-%d", time.Now().UnixNano()), MinIngestedNanos: math.MaxInt64,
 		Generation: generation + 1,
 	}
-	marker := compactionMarker{Output: output, Inputs: make([]string, 0, len(selected))}
+	inputs := make([]string, 0, len(selected))
 	for _, batch := range selected {
-		marker.Inputs = append(marker.Inputs, batch.ID)
+		inputs = append(inputs, batch.ID)
 		if batch.MinIngestedNanos > 0 {
-			marker.Output.MinIngestedNanos = min(marker.Output.MinIngestedNanos, batch.MinIngestedNanos)
+			output.MinIngestedNanos = min(output.MinIngestedNanos, batch.MinIngestedNanos)
 		}
-		marker.Output.MaxIngestedNanos = max(marker.Output.MaxIngestedNanos, batch.MaxIngestedNanos)
-		marker.Output.Spans += batch.Spans
-		marker.Output.Logs += batch.Logs
-		marker.Output.Metrics += batch.Metrics
+		output.MaxIngestedNanos = max(output.MaxIngestedNanos, batch.MaxIngestedNanos)
+		output.Spans += batch.Spans
+		output.Logs += batch.Logs
+		output.Metrics += batch.Metrics
 	}
-	if marker.Output.MinIngestedNanos == math.MaxInt64 {
-		marker.Output.MinIngestedNanos = 0
+	if output.MinIngestedNanos == math.MaxInt64 {
+		output.MinIngestedNanos = 0
 	}
-	stage := r.compactionStage(marker.Output.ID)
+	stage := r.compactionStage(output.ID)
 	if err := os.RemoveAll(stage); err != nil {
 		return 0, err
 	}
@@ -221,12 +208,12 @@ func (r *Repository) compactParquet(ctx context.Context, publisher ParquetPublis
 	if err := errors.Join(syncDirectory(filepath.Dir(stage)), syncDirectory(r.root)); err != nil {
 		return 0, err
 	}
-	prepared := false
-	defer func() {
-		if !prepared {
-			_ = os.RemoveAll(stage)
-		}
-	}()
+	// The staging directory is the whole crash-recovery story. If anything below
+	// fails before PublishReplacement renames it into the batch namespace, it is
+	// removed here and, equivalently, discarded on the next boot; the selected
+	// inputs stay live and a later pass redoes the merge. Once the rename lands,
+	// this path no longer exists and the removal is a no-op.
+	defer func() { _ = os.RemoveAll(stage) }()
 	type mergePlan struct {
 		signal string
 		inputs []string
@@ -249,9 +236,9 @@ func (r *Repository) compactParquet(ctx context.Context, publisher ParquetPublis
 		}
 		plans = append(plans, mergePlan{signal: signal, inputs: inputs, output: filepath.Join(stage, signal+".parquet")})
 	}
-	// Written before the merge, on purpose: the completion marker below is
-	// only reached if the merge returns, and the failure this guards against
-	// is the merge not returning.
+	// Written before the merge, on purpose: the attempt record is cleared only
+	// after the merge returns, and the failure this guards against is the merge
+	// not returning.
 	if err := writeCompactionAttempt(r.root, len(selected)); err != nil {
 		return 0, err
 	}
@@ -264,11 +251,11 @@ func (r *Repository) compactParquet(ctx context.Context, publisher ParquetPublis
 					return fmt.Errorf("compact %s Parquet: %w", plan.signal, err)
 				}
 				if plan.signal == "spans" {
-					if stats.Rows != int64(marker.Output.Spans) {
-						return fmt.Errorf("compacted span count: got %d want %d", stats.Rows, marker.Output.Spans)
+					if stats.Rows != int64(output.Spans) {
+						return fmt.Errorf("compacted span count: got %d want %d", stats.Rows, output.Spans)
 					}
-					marker.Output.MinSpanStartNanos = stats.MinSpanStartNanos
-					marker.Output.MaxSpanStartNanos = stats.MaxSpanStartNanos
+					output.MinSpanStartNanos = stats.MinSpanStartNanos
+					output.MaxSpanStartNanos = stats.MaxSpanStartNanos
 				}
 				if err := mergeCtx.Err(); err != nil {
 					return err
@@ -284,22 +271,27 @@ func (r *Repository) compactParquet(ctx context.Context, publisher ParquetPublis
 	if err != nil {
 		return 0, err
 	}
-	if err := r.Parquet.PrepareReplacement(stage, marker.Output); err != nil {
+	if err := r.Parquet.PrepareReplacement(stage, output); err != nil {
 		return 0, err
 	}
-	data, err := json.Marshal(marker)
-	if err != nil {
+	// Completion is a single atomic step: PublishReplacement writes the output's
+	// replaces.json into the stage, renames the stage into the batch namespace,
+	// and retires the inputs. There is no separate durable marker to recover
+	// from -- the output's presence plus its replaces.json is the whole record,
+	// which boot's loadBatches reapplies, so a crash on either side of the
+	// rename is consistent: before it the inputs are live and the stage is
+	// discarded, after it the output is live and its replaces.json retires the
+	// inputs.
+	if err := r.Parquet.PublishReplacement(stage, output, inputs, func(swap func(context.Context) error) error {
+		return publisher.PublishParquetReplacement(ctx, output, inputs, swap)
+	}); err != nil {
 		return 0, err
 	}
-	if err := writeDurableFile(markerPath, data); err != nil {
-		return 0, err
-	}
-	if err := syncDirectory(r.root); err != nil {
-		return 0, err
-	}
-	prepared = true
-	if err := r.completeCompaction(ctx, marker, publisher.PublishParquetReplacement); err != nil {
-		return 0, err
+	// A completed higher-generation output clears the debt-preemption size; a
+	// generation-0 or minimum-pair completion must leave it, so an earlier
+	// preempted higher generation still shrinks its next attempt.
+	if output.Generation > 1 {
+		r.preemptedCompactionInputs = 0
 	}
 	if err := clearCompactionAttempt(r.root); err != nil {
 		return 0, err
@@ -589,88 +581,8 @@ func (r *Repository) CompactParquetPass(ctx context.Context, publisher ParquetPu
 	}
 }
 
-type parquetPublishFunc func(context.Context, telemetry.BatchMetadata, []string, func(context.Context) error) error
-
-// RecoverParquet resolves a pending compaction marker before any cleanup,
-// retention, or new compaction can mutate its rollback set.
-func (r *Repository) RecoverParquet(ctx context.Context, publisher ParquetPublisher) error {
-	r.compactionMu.Lock()
-	defer r.compactionMu.Unlock()
-	return r.recoverCompaction(ctx, publisher.PublishParquetReplacement)
-}
-
-func (r *Repository) recoverCompaction(ctx context.Context, publish parquetPublishFunc) error {
-	data, err := os.ReadFile(filepath.Join(r.root, "COMPACTION.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var marker compactionMarker
-	if err := json.Unmarshal(data, &marker); err != nil {
-		return err
-	}
-	if err := validateCompactionMarker(marker); err != nil {
-		return err
-	}
-	stageExists, err := pathExists(r.compactionStage(marker.Output.ID))
-	if err != nil {
-		return err
-	}
-	finalExists, err := pathExists(r.Parquet.BatchPath(marker.Output.ID))
-	if err != nil {
-		return err
-	}
-	if !stageExists && !finalExists {
-		if err := r.Parquet.RestoreRetiredInputs(marker.Inputs, marker.Output.ID, func(swap func(context.Context) error) error {
-			return publish(ctx, telemetry.BatchMetadata{}, nil, swap)
-		}); err != nil {
-			return fmt.Errorf("restore compaction %s inputs: %w", marker.Output.ID, err)
-		}
-		if err := os.Remove(filepath.Join(r.root, "COMPACTION.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return syncDirectory(r.root)
-	}
-	return r.completeCompaction(ctx, marker, publish)
-}
-
-func (r *Repository) completeCompaction(ctx context.Context, marker compactionMarker, publish parquetPublishFunc) error {
-	if err := r.Parquet.PublishReplacement(r.compactionStage(marker.Output.ID), marker.Output, marker.Inputs, func(swap func(context.Context) error) error {
-		return publish(ctx, marker.Output, marker.Inputs, swap)
-	}); err != nil {
-		return err
-	}
-	// Recovery can finish publication too; only higher-generation outputs
-	// reset the debt-preemption size.
-	if marker.Output.Generation > 1 {
-		r.preemptedCompactionInputs = 0
-	}
-	markerPath := filepath.Join(r.root, "COMPACTION.json")
-	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return syncDirectory(r.root)
-}
-
 func (r *Repository) compactionStage(id string) string {
 	return filepath.Join(r.root, "compaction", id)
-}
-
-func validateCompactionMarker(marker compactionMarker) error {
-	if err := telemetry.ValidateBatchID(marker.Output.ID); err != nil {
-		return fmt.Errorf("invalid compaction output: %w", err)
-	}
-	if len(marker.Inputs) == 0 {
-		return errors.New("compaction marker has no inputs")
-	}
-	for _, id := range marker.Inputs {
-		if err := telemetry.ValidateBatchID(id); err != nil {
-			return fmt.Errorf("invalid compaction input: %w", err)
-		}
-	}
-	return nil
 }
 
 func syncFile(path string) error {
@@ -692,17 +604,6 @@ func syncDirectory(path string) error {
 	}
 	defer dir.Close()
 	return dir.Sync()
-}
-
-func pathExists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	return false, err
 }
 
 func writeDurableFile(path string, data []byte) error {

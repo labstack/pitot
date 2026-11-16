@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -144,14 +143,10 @@ func TestRepositoryHasOneAuthoritativeStorageLayout(t *testing.T) {
 	}
 }
 
-func TestRepositoryCleansUnpublishedCompactionArtifacts(t *testing.T) {
+func TestRepositoryBootDiscardsCompactionStaging(t *testing.T) {
 	dir := t.TempDir()
 	staging := filepath.Join(dir, "compaction", "orphan")
 	if err := os.MkdirAll(staging, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	temporaryMarker := filepath.Join(dir, "COMPACTION.json.tmp")
-	if err := os.WriteFile(temporaryMarker, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	repository, err := Open(dir)
@@ -159,10 +154,11 @@ func TestRepositoryCleansUnpublishedCompactionArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer repository.Close()
-	for _, path := range []string{filepath.Join(dir, "compaction"), temporaryMarker} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("unpublished compaction artifact remains at %s: %v", path, err)
-		}
+	// Discarding the staging directory is the whole boot-time recovery for an
+	// interrupted compaction: a merge that never renamed its output into the
+	// batch namespace left no authoritative rows behind.
+	if _, err := os.Stat(filepath.Join(dir, "compaction")); !os.IsNotExist(err) {
+		t.Fatalf("compaction staging remains after boot: %v", err)
 	}
 }
 
@@ -218,103 +214,6 @@ func TestRepositoryPrunesOnlyExpiredBatches(t *testing.T) {
 	}
 	if got := repository.RowCount(); got != 3 {
 		t.Fatalf("retained rows = %d, want 3", got)
-	}
-}
-
-func TestRepositoryDiscardsRecoverableMarkerWithoutOutput(t *testing.T) {
-	dir := t.TempDir()
-	repository, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	batch := testBatch()
-	batch.ID = "intact-input"
-	if err := repository.Commit(context.Background(), batch); err != nil {
-		t.Fatal(err)
-	}
-	marker := compactionMarker{
-		Output: telemetry.BatchMetadata{ID: "missing-output", Generation: 1},
-		Inputs: []string{batch.ID},
-	}
-	data, err := json.Marshal(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeDurableFile(filepath.Join(dir, "COMPACTION.json"), data); err != nil {
-		t.Fatal(err)
-	}
-	retired := filepath.Join(repository.Parquet.BatchesDir(), batch.ID+".retired-"+marker.Output.ID)
-	if err := os.Rename(repository.Parquet.BatchPath(batch.ID), retired); err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	recovered, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recovered.Close()
-	if got := recovered.RowCount(); got != 3 {
-		t.Fatalf("rows after marker recovery = %d, want 3", got)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json")); !os.IsNotExist(err) {
-		t.Fatalf("recoverable marker remains: %v", err)
-	}
-}
-
-func TestRepositoryRestoresInputsThroughPublicationGate(t *testing.T) {
-	dir := t.TempDir()
-	repository, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer repository.Close()
-	batch := testBatch()
-	batch.ID = "retired-input"
-	if err := repository.Commit(context.Background(), batch); err != nil {
-		t.Fatal(err)
-	}
-	marker := compactionMarker{
-		Output: telemetry.BatchMetadata{ID: "missing-output", Generation: 1},
-		Inputs: []string{batch.ID},
-	}
-	data, err := json.Marshal(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeDurableFile(filepath.Join(dir, "COMPACTION.json"), data); err != nil {
-		t.Fatal(err)
-	}
-	retired := filepath.Join(repository.Parquet.BatchesDir(), batch.ID+".retired-"+marker.Output.ID)
-	if err := os.Rename(repository.Parquet.BatchPath(batch.ID), retired); err != nil {
-		t.Fatal(err)
-	}
-
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	publisher := testParquetPublisherFunc(func(ctx context.Context, publish func(context.Context) error) error {
-		close(entered)
-		<-release
-		return publish(ctx)
-	})
-	done := make(chan error, 1)
-	go func() { done <- repository.RecoverParquet(context.Background(), publisher) }()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("recovery did not enter the publication gate")
-	}
-	if _, err := os.Stat(repository.Parquet.BatchPath(batch.ID)); !os.IsNotExist(err) {
-		t.Fatalf("input became visible before publication: %v", err)
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(repository.Parquet.BatchPath(batch.ID)); err != nil {
-		t.Fatalf("input was not restored after publication: %v", err)
 	}
 }
 
@@ -389,7 +288,7 @@ func TestRepositoryCleanupOwnsRetiredDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer repository.Close()
-	retired := filepath.Join(repository.Parquet.BatchesDir(), "old.retired-compacted")
+	retired := filepath.Join(repository.Parquet.BatchesDir(), "old.retired")
 	if err := os.Mkdir(retired, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -493,9 +392,6 @@ func TestRepositoryCompactsParquetWithoutChangingRows(t *testing.T) {
 			t.Fatalf("compacted %s rows = %d", signal, count)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json")); !os.IsNotExist(err) {
-		t.Fatalf("completed compaction marker remains: %v", err)
-	}
 }
 
 func TestSelectCompactionBatchesRequiresFullSmallFileGroup(t *testing.T) {
@@ -575,126 +471,6 @@ func TestSelectCompactionBatchesSkipsUncompactableOlderGroup(t *testing.T) {
 	}
 }
 
-func TestRepositoryRecoversPendingCompactionWithoutRestart(t *testing.T) {
-	dir := t.TempDir()
-	repository, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer repository.Close()
-	for i := range minCompactionInputs {
-		batch := testBatch()
-		batch.ID = fmt.Sprintf("pending-%d", i)
-		batch.Spans[0].SpanID = fmt.Sprintf("span-%d", i)
-		if err := repository.Commit(context.Background(), batch); err != nil {
-			t.Fatal(err)
-		}
-	}
-	compactor := &testParquetCompactor{publishErr: errors.New("publication unavailable")}
-	if _, err := repository.CompactParquet(context.Background(), compactor, minCompactionInputs); err == nil {
-		t.Fatal("compaction succeeded despite publication failure")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json")); err != nil {
-		t.Fatalf("pending marker: %v", err)
-	}
-	compactor.publishErr = nil
-	if compacted, err := repository.CompactParquet(context.Background(), compactor, minCompactionInputs); err != nil || compacted != 0 {
-		t.Fatalf("resume compaction = %d, %v", compacted, err)
-	}
-	if got := repository.Parquet.BatchMetadata(); len(got) != 1 || got[0].Generation != 1 {
-		t.Fatalf("recovered metadata = %#v", got)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json")); !os.IsNotExist(err) {
-		t.Fatalf("recovered compaction marker remains: %v", err)
-	}
-}
-
-func TestRepositoryRecoversInterruptedCompactionSwap(t *testing.T) {
-	dir := t.TempDir()
-	repository, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range minCompactionInputs {
-		batch := testBatch()
-		batch.ID = fmt.Sprintf("recover-%d", i)
-		batch.Spans[0].SpanID = fmt.Sprintf("span-%d", i)
-		if err := repository.Commit(context.Background(), batch); err != nil {
-			t.Fatal(err)
-		}
-	}
-	output := telemetry.BatchMetadata{
-		ID: "compact-recovery", MinIngestedNanos: 100, MaxIngestedNanos: 300, Generation: 1,
-		Spans: minCompactionInputs, Logs: minCompactionInputs, Metrics: minCompactionInputs,
-	}
-	stage := repository.compactionStage(output.ID)
-	if err := os.MkdirAll(stage, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range telemetry.Signals {
-		signal := s.Name
-		paths := make([]string, minCompactionInputs)
-		for i := range paths {
-			paths[i] = filepath.Join(repository.Parquet.BatchPath(fmt.Sprintf("recover-%d", i)), signal+".parquet")
-		}
-		stats, err := repository.Parquet.MergeParquet(context.Background(), signal, paths, filepath.Join(stage, signal+".parquet"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if signal == "spans" {
-			output.MinSpanStartNanos = stats.MinSpanStartNanos
-			output.MaxSpanStartNanos = stats.MaxSpanStartNanos
-		}
-	}
-	if err := repository.Parquet.PrepareReplacement(stage, output); err != nil {
-		t.Fatal(err)
-	}
-	inputs := make([]string, minCompactionInputs)
-	for i := range inputs {
-		inputs[i] = fmt.Sprintf("recover-%d", i)
-	}
-	marker := compactionMarker{Output: output, Inputs: inputs}
-	data, err := json.Marshal(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeDurableFile(filepath.Join(dir, "COMPACTION.json"), data); err != nil {
-		t.Fatal(err)
-	}
-	// Reproduce a crash halfway through retiring inputs. Startup must finish
-	// the intended publication, not expose a half-old/half-new file set.
-	for _, id := range inputs[:4] {
-		if err := os.Rename(repository.Parquet.BatchPath(id), filepath.Join(repository.Parquet.BatchesDir(), id+".retired-"+output.ID)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// The crashed process exits, releasing its data-directory lock while the
-	// marker, staged output, and retired inputs stay on disk for recovery.
-	if err := repository.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	recovered, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recovered.Close()
-	metadata := recovered.Parquet.BatchMetadata()
-	if len(metadata) != 1 || metadata[0].ID != output.ID || recovered.RowCount() != 3*minCompactionInputs {
-		t.Fatalf("recovered metadata = %#v rows=%d", metadata, recovered.RowCount())
-	}
-	spans, err := traceAll(recovered, "trace-1")
-	if err != nil || len(spans) != minCompactionInputs {
-		t.Fatalf("recovered trace spans = %d, %v", len(spans), err)
-	}
-	if retired, err := filepath.Glob(filepath.Join(recovered.Parquet.BatchesDir(), "*.retired*")); err != nil || len(retired) != 0 {
-		t.Fatalf("retired inputs after recovery = %v, %v", retired, err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json")); !os.IsNotExist(err) {
-		t.Fatalf("compaction marker remains after recovery: %v", err)
-	}
-}
-
 func openTestDuckDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("duckdb", "")
@@ -709,217 +485,6 @@ func traceAll(repository *Repository, traceID string) ([]telemetry.IndexedSpan, 
 		TraceID: traceID, StartNanos: -1 << 63, EndNanos: 1<<63 - 1, Limit: 500,
 	})
 	return spans, err
-}
-
-// seedFailedCompaction leaves a live COMPACTION.json whose recovery always
-// fails, which is the state that used to latch maintenance off permanently.
-func seedFailedCompaction(t *testing.T, dir string, repository *Repository) {
-	t.Helper()
-	for i := range minCompactionInputs {
-		batch := testBatch()
-		batch.ID = fmt.Sprintf("latched-%d", i)
-		batch.Spans[0].SpanID = fmt.Sprintf("span-%d", i)
-		if err := repository.Commit(context.Background(), batch); err != nil {
-			t.Fatal(err)
-		}
-	}
-	compactor := &testParquetCompactor{publishErr: errors.New("publication unavailable")}
-	if _, err := repository.CompactParquet(context.Background(), compactor, minCompactionInputs); err == nil {
-		t.Fatal("compaction succeeded despite publication failure")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json")); err != nil {
-		t.Fatalf("expected a live marker: %v", err)
-	}
-}
-
-// TestRepositoryRecoveryFailureStaysLive pins fail-closed recovery. The marker
-// and rollback set remain authoritative until recovery succeeds; silently
-// bypassing them can make old inputs eligible for deletion.
-func TestRepositoryRecoveryFailureStaysLive(t *testing.T) {
-	dir := t.TempDir()
-	repository, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer repository.Close()
-	seedFailedCompaction(t, dir, repository)
-
-	failing := testParquetPublisherFunc(func(context.Context, func(context.Context) error) error {
-		return errors.New("publication unavailable")
-	})
-	for attempt := 1; attempt <= 5; attempt++ {
-		if err := repository.RecoverParquet(context.Background(), failing); err == nil {
-			t.Fatalf("attempt %d: recovery reported success", attempt)
-		}
-		if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json")); err != nil {
-			t.Fatalf("attempt %d: live marker was removed: %v", attempt, err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json.failed")); !os.IsNotExist(err) {
-		t.Fatalf("recovery created a fallback marker: %v", err)
-	}
-}
-
-// TestRepositoryCleanupPreservesMarkerRollbackSet pins that cleanup never
-// deletes the retired inputs a pending marker still needs. Deleting one is
-// unrecoverable: the input is gone and its rows were never published under the
-// replacement, so the rows exist in no queryable batch at all.
-func TestRepositoryCleanupPreservesMarkerRollbackSet(t *testing.T) {
-	dir := t.TempDir()
-	repository, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer repository.Close()
-
-	marker := compactionMarker{
-		Output: telemetry.BatchMetadata{ID: "compact-live", Generation: 1},
-		Inputs: []string{"input-a"},
-	}
-	data, err := json.Marshal(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeDurableFile(filepath.Join(dir, "COMPACTION.json"), data); err != nil {
-		t.Fatal(err)
-	}
-	batches := repository.Parquet.BatchesDir()
-	needed := filepath.Join(batches, "input-a.retired-compact-live")
-	stale := filepath.Join(batches, "input-b.retired")
-	for _, path := range []string{needed, stale} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if err := repository.CleanupParquet(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(needed); err != nil {
-		t.Fatalf("cleanup deleted the rollback set of a live marker: %v", err)
-	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("cleanup left an unreferenced retired directory: %v", err)
-	}
-}
-
-func TestRepositoryOpenFailsClosedOnUnrecoverableMarker(t *testing.T) {
-	dir := t.TempDir()
-	repository, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedFailedCompaction(t, dir, repository)
-	if err := repository.Close(); err != nil {
-		t.Fatal(err)
-	}
-	// Corrupt the staged output so recovery cannot complete or roll back.
-	stage := filepath.Join(dir, "compaction")
-	entries, err := os.ReadDir(stage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if err := os.WriteFile(filepath.Join(stage, entry.Name(), "metadata.json"), []byte("{"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if reopened, err := Open(dir); err == nil {
-		_ = reopened.Close()
-		t.Fatal("Open succeeded with an unrecoverable marker")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json")); err != nil {
-		t.Fatalf("Open removed the live marker: %v", err)
-	}
-	if _, err := os.Stat(stage); err != nil {
-		t.Fatalf("Open destroyed the staged output: %v", err)
-	}
-}
-
-func TestRepositoryOpenFailsOnUnreadableMarker(t *testing.T) {
-	dir := t.TempDir()
-	repository, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "COMPACTION.json"), []byte("not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for boot := 1; boot <= 3; boot++ {
-		if reopened, err := Open(dir); err == nil {
-			_ = reopened.Close()
-			t.Fatalf("boot %d accepted an unreadable marker", boot)
-		}
-		if _, err := os.Stat(filepath.Join(dir, "COMPACTION.json")); err != nil {
-			t.Fatalf("boot %d removed the unreadable marker: %v", boot, err)
-		}
-	}
-}
-
-func TestRepositoryOpenRejectsUnsafeCompactionMarker(t *testing.T) {
-	dir := t.TempDir()
-	repository, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.Close(); err != nil {
-		t.Fatal(err)
-	}
-	marker := compactionMarker{
-		Output: telemetry.BatchMetadata{ID: "../outside"},
-		Inputs: []string{"input"},
-	}
-	data, err := json.Marshal(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	markerPath := filepath.Join(dir, "COMPACTION.json")
-	if err := os.WriteFile(markerPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if reopened, err := Open(dir); err == nil {
-		_ = reopened.Close()
-		t.Fatal("Open accepted a marker-controlled path outside storage")
-	}
-	if _, err := os.Stat(markerPath); err != nil {
-		t.Fatalf("Open removed the invalid live marker: %v", err)
-	}
-}
-
-// TestUnresolvedCompactionRunbookExists keeps the startup log's runbook link
-// pointing at a section that exists. The log stopped restating the rollback
-// procedure because maintaining it in two places produced a string of
-// revisions that corrected one copy and left the other unsafe; a link only
-// removes that risk while it resolves, so the anchor is checked here rather
-// than trusted.
-func TestUnresolvedCompactionRunbookExists(t *testing.T) {
-	const guide = "../../../site/src/content/docs/docs/guides/troubleshooting.mdx"
-	data, err := os.ReadFile(guide)
-	if err != nil {
-		t.Fatalf("read the runbook the startup log links to: %v", err)
-	}
-	_, anchor, found := strings.Cut(compactionRunbookURL, "#")
-	if !found {
-		t.Fatalf("runbook URL %q has no anchor", compactionRunbookURL)
-	}
-	var headings []string
-	for _, line := range strings.Split(string(data), "\n") {
-		title, isHeading := strings.CutPrefix(line, "## ")
-		if !isHeading {
-			continue
-		}
-		slug := strings.ToLower(strings.TrimSpace(title))
-		slug = strings.Join(strings.Fields(slug), "-")
-		headings = append(headings, slug)
-		if slug == anchor {
-			return
-		}
-	}
-	t.Fatalf("runbook anchor %q is not a section in %s; sections are %v", anchor, guide, headings)
 }
 
 // A live repository owns its data directory exclusively: it deletes, renames,
@@ -952,7 +517,6 @@ func TestOpenRejectsSecondProcessOnSameDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
 func (f testParquetPublisherFunc) PublishParquetReplacement(ctx context.Context, _ telemetry.BatchMetadata, _ []string, publish func(context.Context) error) error {
 	return f.PublishParquet(ctx, publish)
 }

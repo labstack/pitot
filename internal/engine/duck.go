@@ -997,10 +997,6 @@ func runMaintenanceSchedule(ctx context.Context, every time.Duration, run func()
 
 func (d *Duck) runParquetCompactionCycle(ctx context.Context) (int, error) {
 	started := time.Now()
-	if err := d.repository.RecoverParquet(ctx, d); err != nil {
-		metrics.RecordTelemetryOperation(metrics.TelemetryCompaction, metrics.TelemetryError, time.Since(started).Seconds())
-		return 0, err
-	}
 	compacted, err := d.repository.CompactParquetPass(ctx, d, parquetMaintenanceBatchLimit, parquetCompactionCycleBudget)
 	// Retired inputs wait only for readers that captured them, which query
 	// deadlines bound, so each cycle deletes what earlier cycles retired.
@@ -1027,25 +1023,21 @@ func (d *Duck) runParquetCompactionCycle(ctx context.Context) (int, error) {
 
 func (d *Duck) runRepositoryMaintenance(ctx context.Context) error {
 	start := time.Now()
-	recoveryErr := d.repository.RecoverParquet(ctx, d)
 	compactStart := time.Now()
-	var cleanupErr, parquetErr, compactErr error
-	compacted := 0
-	if recoveryErr == nil {
-		cleanupErr = d.repository.CleanupParquet()
-		if d.cfg.RetentionDays > 0 {
-			_, parquetErr = d.repository.PruneParquetPass(ctx, d, time.Now().Add(-time.Duration(d.cfg.RetentionDays)*24*time.Hour).UnixNano(), parquetMaintenanceBatchLimit, parquetMaintenancePhaseBudget)
-		}
-		compacted, compactErr = d.repository.CompactParquetPass(ctx, d, parquetMaintenanceBatchLimit, parquetMaintenancePhaseBudget)
+	var parquetErr error
+	cleanupErr := d.repository.CleanupParquet()
+	if d.cfg.RetentionDays > 0 {
+		_, parquetErr = d.repository.PruneParquetPass(ctx, d, time.Now().Add(-time.Duration(d.cfg.RetentionDays)*24*time.Hour).UnixNano(), parquetMaintenanceBatchLimit, parquetMaintenancePhaseBudget)
 	}
+	compacted, compactErr := d.repository.CompactParquetPass(ctx, d, parquetMaintenanceBatchLimit, parquetMaintenancePhaseBudget)
 	compactResult := metrics.TelemetryNoop
-	if recoveryErr != nil || compactErr != nil {
+	if compactErr != nil {
 		compactResult = metrics.TelemetryError
 	} else if compacted > 0 {
 		compactResult = metrics.TelemetrySuccess
 	}
 	metrics.RecordTelemetryOperation(metrics.TelemetryCompaction, compactResult, time.Since(compactStart).Seconds())
-	pruneErr := errors.Join(recoveryErr, cleanupErr, parquetErr, compactErr)
+	pruneErr := errors.Join(cleanupErr, parquetErr, compactErr)
 	// Retention DELETEs on the rollup-cache tables are maintenance work: they
 	// reclaim storage, so a failure here still degrades maintenance readiness.
 	// They hold both write gates and the background slot, as the checkpoint

@@ -169,7 +169,7 @@ func TestShreddedResourcesAreSharedAcrossFilesAndBounded(t *testing.T) {
 }
 
 func TestUnsupportedFormatLeavesStoreUntouched(t *testing.T) {
-	for _, suffix := range []string{BatchSuffix, ".retired", ".retired-replacement"} {
+	for _, suffix := range []string{BatchSuffix, ".retired"} {
 		t.Run(suffix, func(t *testing.T) { testUnsupportedFormatLeavesStoreUntouched(t, suffix) })
 	}
 }

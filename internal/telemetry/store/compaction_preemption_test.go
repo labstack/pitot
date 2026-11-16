@@ -73,9 +73,6 @@ func TestHigherGenerationMergeYieldsWithoutBlockingDebtRetirement(t *testing.T) 
 	if r.CompactionDebt() >= telemetry.CompactionDebtLimit {
 		t.Fatal("debt did not retire")
 	}
-	if err := r.RecoverParquet(ctx, &testParquetCompactor{}); err != nil {
-		t.Fatal(err)
-	}
 	if err := r.CleanupParquet(); err != nil {
 		t.Fatal(err)
 	}

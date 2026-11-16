@@ -15,12 +15,10 @@ Everything Pitot persists lives under `PITOT_DATA_DIR` (`./data` by default,
 |---|---|
 | `telemetry/parquet/batches/*.batch/` | Authoritative atomic batches containing `metadata.json`, present signal Parquet files, and `trace.fidx` when spans are present. A compacted batch also lists the inputs it replaced in `replaces.json`; those inputs are no longer authoritative and keep their directories only until readers that captured them finish |
 | `telemetry/parquet/batches/_schema.batch/` | Empty schema anchors that keep every DuckDB view queryable |
-| `telemetry/parquet/batches/*.retired/` | Replaced or expired batches being deleted; startup removes any left by a crash |
-| `telemetry/parquet/batches/*.retired-*/` | Compaction inputs from releases before deferred deletion; a live marker protects its own set |
+| `telemetry/parquet/batches/*.retired/` | Expired batches being deleted; startup removes any left by a crash |
 | `telemetry/parquet/batches/*.quarantined-*/` | Unreadable batches explicitly set aside by `pitot repair quarantine`; preserved but not queryable |
 | `telemetry/parquet/staging/` | Unacknowledged writes being prepared for atomic publication |
-| `telemetry/compaction/` | Prepared replacement batches during compaction |
-| `telemetry/COMPACTION.json` | Durable marker for an interrupted compaction swap. Present only while one is unresolved, and blocks startup until it is — see [troubleshoot](/docs/guides/troubleshooting) |
+| `telemetry/compaction/` | Prepared replacement batches during compaction; startup discards any left by a crash |
 | `query/catalog.duckdb` | Rebuildable DuckDB rollups and query state |
 | `query/tmp/` | Spill space for queries that exceed the memory cap |
 | `control/pitot.sqlite` | Users, sessions, dashboards, alert rules, agent history |
