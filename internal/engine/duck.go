@@ -104,13 +104,36 @@ type Duck struct {
 	// Protected by writeGate; controls periodic version-history retirement.
 	versionRollupPasses   uint64
 	versionRollupFailures map[string]versionRollupFailure
-	// maintHealthMu guards the maintenance health fields below, which the
-	// readiness probe reads while the maintenance pass writes them.
+	// maintHealthMu guards the maintenance and checkpoint health fields below,
+	// which the readiness probe reads while the maintenance pass and the
+	// compaction cycle write them.
 	maintHealthMu       sync.Mutex
 	lastMaintenanceOK   time.Time
 	lastMaintenanceAt   time.Time
 	lastMaintenanceErr  error
 	maintenanceFailures int
+	// Checkpoint health is tracked separately from maintenance health on
+	// purpose. Folding the rollup-cache WAL back into its file (CHECKPOINT) is
+	// the one maintenance step the engine can refuse on a busy instance — the
+	// non-FORCE form will not run while a read that began before the last write
+	// commit is still open — yet a missed fold harms nothing a restart or an
+	// operator page would fix: the WAL stays correct and queryable, it is just
+	// larger until the next successful fold. Rolling that miss into the whole
+	// maintenance error made a single transient refusal flip /readyz to degraded
+	// until the next hourly pass. Keeping it separate lets the 10s compaction
+	// cycle retry the fold so a miss self-heals in seconds, while retention,
+	// prune, and compaction failures — which do let storage grow unchecked —
+	// still degrade maintenance readiness immediately.
+	//
+	// checkpointPending means the WAL has unfolded work and the last attempt did
+	// not complete; both the hourly pass and the 10s cycle honor it, and a
+	// success clears it. When it is false the cycle takes no write gate at all,
+	// so an idle WAL adds no contention with the 60s rollup tick.
+	checkpointPending  bool
+	lastCheckpointOK   time.Time
+	lastCheckpointAt   time.Time
+	lastCheckpointErr  error
+	checkpointFailures int
 }
 
 // MaintenanceHealth reports the maintenance loop's own health: when it last
@@ -125,6 +148,94 @@ func (d *Duck) MaintenanceHealth() (lastOK, lastAt time.Time, consecutiveFailure
 	d.maintHealthMu.Lock()
 	defer d.maintHealthMu.Unlock()
 	return d.lastMaintenanceOK, d.lastMaintenanceAt, d.maintenanceFailures, d.lastMaintenanceErr
+}
+
+// CheckpointHealth reports the rollup-cache checkpoint's own health, mirroring
+// MaintenanceHealth: when a fold last succeeded, when one was last attempted,
+// how many have failed in a row, and the most recent error (nil after a clean
+// fold). It is surfaced via /readyz separately from maintenance so a transient
+// refusal — retried on the 10s compaction cycle — does not degrade readiness,
+// while a fold that keeps failing well past that cadence still does. A zero
+// lastAt means no checkpoint has been attempted since the process started.
+func (d *Duck) CheckpointHealth() (lastOK, lastAt time.Time, consecutiveFailures int, lastErr error) {
+	d.maintHealthMu.Lock()
+	defer d.maintHealthMu.Unlock()
+	return d.lastCheckpointOK, d.lastCheckpointAt, d.checkpointFailures, d.lastCheckpointErr
+}
+
+// markCheckpointPending records that the rollup-cache WAL has work to fold, so
+// the next hourly pass or 10s compaction cycle attempts a checkpoint.
+func (d *Duck) markCheckpointPending() {
+	d.maintHealthMu.Lock()
+	d.checkpointPending = true
+	d.maintHealthMu.Unlock()
+}
+
+// recordCheckpointHealth folds one checkpoint outcome into checkpoint health.
+// A success clears the pending flag; a failure leaves it set so a later cycle
+// retries, and never touches maintenance health.
+func (d *Duck) recordCheckpointHealth(err error) {
+	finished := time.Now()
+	d.maintHealthMu.Lock()
+	defer d.maintHealthMu.Unlock()
+	d.lastCheckpointAt = finished
+	d.lastCheckpointErr = err
+	if err == nil {
+		d.lastCheckpointOK = finished
+		d.checkpointFailures = 0
+		d.checkpointPending = false
+		return
+	}
+	d.checkpointFailures++
+}
+
+// runPendingCheckpoint folds the rollup-cache WAL back into its file when a
+// checkpoint is pending, recording the outcome in checkpoint health. Both the
+// hourly maintenance pass and the 10s compaction cycle call it, so a fold the
+// hourly pass could not complete self-heals within one cycle (~10s) instead of
+// waiting a full maintenance interval.
+//
+// When nothing is pending it reads a flag and returns, taking no write gate, so
+// the 10s cycle adds no contention on an idle WAL. When a fold is pending it
+// holds both write gates and the background slot — the same critical section
+// the hourly pass used — which is idle-cheap relative to the 60s rollup tick.
+//
+// It returns a non-nil error only when the caller's context was cancelled or
+// expired, so the maintenance pass and loop stop promptly; a checkpoint refusal
+// or other checkpoint error is recorded in checkpoint health and retried later,
+// not surfaced to the caller as a maintenance failure.
+func (d *Duck) runPendingCheckpoint(ctx context.Context) error {
+	d.maintHealthMu.Lock()
+	pending := d.checkpointPending
+	d.maintHealthMu.Unlock()
+	if !pending {
+		return nil
+	}
+	err := func() error {
+		unlock, err := d.writeGate.LockContext(ctx, writegate.Maintenance)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		unlockCache, err := d.cacheGate.LockContext(ctx, writegate.Maintenance)
+		if err != nil {
+			return err
+		}
+		defer unlockCache()
+		background, err := d.lockBackground(ctx)
+		if err != nil {
+			return err
+		}
+		defer background()
+		return d.checkpoint(ctx)
+	}()
+	if ctx.Err() != nil {
+		// The caller gave up (deadline or shutdown). This is not a checkpoint
+		// failure: leave it pending for a later cycle and surface cancellation.
+		return ctx.Err()
+	}
+	d.recordCheckpointHealth(err)
+	return nil
 }
 
 const (
@@ -565,9 +676,9 @@ func (d *Duck) writer() *sql.DB { return d.writeDB }
 // that took. Checkpoint work can contend with reads, so it is a candidate
 // explanation for a stalled query and has to be measurable.
 //
-// Maintenance holds both write gates throughout this operation. The pinned
-// engine can still return its transaction-conflict diagnostic when an older
-// reader remains open after a newer write commits. Give that reader a bounded
+// runPendingCheckpoint holds both write gates throughout this operation. The
+// pinned engine can still return its transaction-conflict diagnostic when an
+// older reader remains open after a newer write commits. Give that reader a bounded
 // opportunity to drain; keep one writer connection and admit no new writers.
 // Other errors are not retried. Metrics describe the logical operation: one
 // failure on exhaustion/error, or one successful duration including retry wait.
@@ -631,7 +742,12 @@ func (d *Duck) checkpoint(ctx context.Context) (retErr error) {
 }
 
 const (
-	checkpointRetryBudget = 250 * time.Millisecond
+	// A few seconds, not milliseconds: the old 250ms budget was shorter than any
+	// read that began before the last write commit and was still running, so a
+	// busy instance reliably missed the fold. Both write gates are idle-cheap
+	// relative to the 60s rollup tick, so giving an older reader a few seconds to
+	// drain costs little and lets the common transient conflict clear in place.
+	checkpointRetryBudget = 3 * time.Second
 	checkpointRetryDelay  = 10 * time.Millisecond
 	checkpointBusyMessage = "TransactionContext Error: Cannot CHECKPOINT: there are other write transactions active. Try using FORCE CHECKPOINT to wait until all active transactions are finished"
 )
@@ -870,6 +986,13 @@ func (d *Duck) runParquetCompactionCycle(ctx context.Context) (int, error) {
 		result = metrics.TelemetrySuccess
 	}
 	metrics.RecordTelemetryOperation(metrics.TelemetryCompaction, result, time.Since(started).Seconds())
+	// Retry a checkpoint the hourly pass (or an earlier cycle) could not
+	// complete, so a missed WAL fold self-heals within one ~10s cycle instead of
+	// waiting for the next hourly maintenance pass. This takes no write gate when
+	// nothing is pending, and its outcome lives in checkpoint health — never
+	// folded into the compaction result this returns. The cycle has its own
+	// ctx.Done() path, so the cancellation signal is discarded here.
+	_ = d.runPendingCheckpoint(ctx)
 	return compacted, err
 }
 
@@ -894,33 +1017,12 @@ func (d *Duck) runRepositoryMaintenance(ctx context.Context) error {
 	}
 	metrics.RecordTelemetryOperation(metrics.TelemetryCompaction, compactResult, time.Since(compactStart).Seconds())
 	pruneErr := errors.Join(recoveryErr, cleanupErr, parquetErr, compactErr)
-	cacheErr := func() error {
-		unlock, err := d.writeGate.LockContext(ctx, writegate.Maintenance)
-		if err != nil {
-			return err
-		}
-		defer unlock()
-		unlockCache, err := d.cacheGate.LockContext(ctx, writegate.Maintenance)
-		if err != nil {
-			return err
-		}
-		defer unlockCache()
-		background, err := d.lockBackground(ctx)
-		if err != nil {
-			return err
-		}
-		defer background()
-		var errs []error
-		if d.cfg.RetentionDays > 0 {
-			for _, table := range []string{"service_rollup", "span_rollup", "log_rollup", "endpoint_rollup", "receiver_rollup", "resource_rollup", "receiver_entity_rollup", "edge_rollup"} {
-				if _, err := d.writer().ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE bucket < (now() - INTERVAL %d DAY)::TIMESTAMP_NS", table, d.cfg.RetentionDays)); err != nil {
-					errs = append(errs, fmt.Errorf("prune %s: %w", table, err))
-				}
-			}
-		}
-		return errors.Join(errors.Join(errs...), d.checkpoint(ctx))
-	}()
-	err := errors.Join(pruneErr, cacheErr)
+	// Retention DELETEs on the rollup-cache tables are maintenance work: they
+	// reclaim storage, so a failure here still degrades maintenance readiness.
+	// They hold both write gates and the background slot, as the checkpoint
+	// does, but are kept separate from it so the fold can be retried on its own.
+	retentionErr := d.pruneRollupCache(ctx)
+	err := errors.Join(pruneErr, retentionErr)
 	maintenanceResult := metrics.TelemetrySuccess
 	if err != nil {
 		maintenanceResult = metrics.TelemetryError
@@ -940,7 +1042,48 @@ func (d *Duck) runRepositoryMaintenance(ctx context.Context) error {
 	if err == nil {
 		slog.Info("telemetry maintenance complete", "duration", time.Since(start))
 	}
+	// Fold the rollup-cache WAL back into its file. An interval of rollup
+	// commits plus the retention DELETEs above have grown it, so there is always
+	// work to fold; mark it pending and attempt it now. A refusal from a
+	// still-open older reader is recorded in checkpoint health (not maintenance)
+	// and retried on the 10s compaction cycle, so it does not fail this pass.
+	// Only a context cancellation propagates, so the loop stops promptly.
+	d.markCheckpointPending()
+	if cancelErr := d.runPendingCheckpoint(ctx); cancelErr != nil {
+		return errors.Join(err, cancelErr)
+	}
 	return err
+}
+
+// pruneRollupCache deletes retention-expired rows from the rollup-cache tables
+// under both write gates and the background slot. It is a no-op taking no gate
+// when retention is disabled.
+func (d *Duck) pruneRollupCache(ctx context.Context) error {
+	if d.cfg.RetentionDays <= 0 {
+		return nil
+	}
+	unlock, err := d.writeGate.LockContext(ctx, writegate.Maintenance)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	unlockCache, err := d.cacheGate.LockContext(ctx, writegate.Maintenance)
+	if err != nil {
+		return err
+	}
+	defer unlockCache()
+	background, err := d.lockBackground(ctx)
+	if err != nil {
+		return err
+	}
+	defer background()
+	var errs []error
+	for _, table := range []string{"service_rollup", "span_rollup", "log_rollup", "endpoint_rollup", "receiver_rollup", "resource_rollup", "receiver_entity_rollup", "edge_rollup"} {
+		if _, err := d.writer().ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE bucket < (now() - INTERVAL %d DAY)::TIMESTAMP_NS", table, d.cfg.RetentionDays)); err != nil {
+			errs = append(errs, fmt.Errorf("prune %s: %w", table, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // rollupChunkWins is how many committed passes in a row grow a narrowed
