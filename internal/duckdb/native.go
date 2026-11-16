@@ -9,7 +9,12 @@ extern int32_t duckdb_extension_core_functions_describe(duckdb_extension_descrip
 extern int32_t duckdb_extension_json_describe(duckdb_extension_descriptor *);
 extern int32_t duckdb_extension_parquet_describe(duckdb_extension_descriptor *);
 extern int32_t duckdb_extension_icu_describe(duckdb_extension_descriptor *);
-static int register_extensions(void) {
+
+// The DuckDB bindings call duckdb_register_static_extensions from their own
+// init, before any database opens. The prebuilt platform modules define it;
+// Pitot links its own minimal static engine (core functions, JSON, Parquet,
+// ICU) through scripts/with-duckdb.sh instead, so it supplies the loader here.
+int32_t duckdb_register_static_extensions(void) {
  return duckdb_register_static_extension(duckdb_extension_core_functions_describe)
    | duckdb_register_static_extension(duckdb_extension_json_describe)
    | duckdb_register_static_extension(duckdb_extension_parquet_describe)
@@ -24,8 +29,5 @@ const SourceCommit = "d54cbbe3df"
 func init() {
 	if C.GoString(C.duckdb_library_version()) != Version {
 		panic("Pitot requires DuckDB " + Version + "; build with scripts/with-duckdb.sh")
-	}
-	if C.register_extensions() != 0 {
-		panic("DuckDB static extension registration failed")
 	}
 }
