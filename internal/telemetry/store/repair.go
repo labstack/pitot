@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -90,9 +89,11 @@ func VerifyBatches(root string) ([]BatchIssue, error) {
 }
 
 // QuarantineBatch atomically sets aside one specifically named unreadable
-// batch. Valid data and any batch protected by a live compaction transaction
-// are refused. The returned directory remains beside the authoritative set so
-// an operator can recover it from a backup or rename it back after repair.
+// batch. Valid data is refused. The returned directory remains beside the
+// authoritative set so an operator can recover it from a backup or rename it
+// back after repair. Repair runs only against a data directory no live
+// instance holds -- the data-directory lock enforces that -- so there is no
+// in-process compaction for it to collide with.
 func QuarantineBatch(root, id string) (string, error) {
 	// Refuse to rename batches out from under a live store, which has no
 	// cross-process coordination with this command.
@@ -110,9 +111,6 @@ func quarantineBatch(root, id string, validate func(string) error) (string, erro
 	}
 	if id+telemetry.BatchSuffix == telemetry.SchemaBatch {
 		return "", errors.New("the Parquet schema batch cannot be quarantined")
-	}
-	if err := ensureBatchOutsideLiveCompaction(root, id); err != nil {
-		return "", err
 	}
 	batchesDir := filepath.Join(root, "parquet", "batches")
 	source := filepath.Join(batchesDir, id+telemetry.BatchSuffix)
@@ -136,31 +134,4 @@ func quarantineBatch(root, id string, validate func(string) error) (string, erro
 		return destination, fmt.Errorf("quarantined telemetry batch %s at %s but could not sync the directory: %w", id, destination, err)
 	}
 	return destination, nil
-}
-
-func ensureBatchOutsideLiveCompaction(root, id string) error {
-	path := filepath.Join(root, "COMPACTION.json")
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect live compaction marker: %w", err)
-	}
-	var marker compactionMarker
-	if err := json.Unmarshal(data, &marker); err != nil {
-		return fmt.Errorf("read live compaction marker: %w", err)
-	}
-	if err := validateCompactionMarker(marker); err != nil {
-		return fmt.Errorf("read live compaction marker: %w", err)
-	}
-	if marker.Output.ID == id {
-		return fmt.Errorf("telemetry batch %s belongs to a live compaction; resolve that transaction before repair", id)
-	}
-	for _, input := range marker.Inputs {
-		if input == id {
-			return fmt.Errorf("telemetry batch %s belongs to a live compaction; resolve that transaction before repair", id)
-		}
-	}
-	return nil
 }

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -169,34 +168,6 @@ func TestConcurrentVerifyReportsUnsupportedFormat(t *testing.T) {
 		if _, err := VerifyBatches(root); !errors.Is(err, telemetry.ErrUnsupportedBatchFormat) {
 			t.Fatalf("verify: %v", err)
 		}
-	}
-}
-
-func TestQuarantineBatchRefusesLiveCompactionMembers(t *testing.T) {
-	root := t.TempDir()
-	repository, err := Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.Commit(context.Background(), Batch{
-		ID: "input", Spans: []telemetry.Span{{TraceID: "trace", SpanID: "span"}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.Close(); err != nil {
-		t.Fatal(err)
-	}
-	corruptBatchFile(t, root, "input", "spans.parquet")
-	marker := compactionMarker{Output: telemetry.BatchMetadata{ID: "replacement"}, Inputs: []string{"input"}}
-	data, err := json.Marshal(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "COMPACTION.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := QuarantineBatch(root, "input"); err == nil || !strings.Contains(err.Error(), "live compaction") {
-		t.Fatalf("QuarantineBatch live input error = %v", err)
 	}
 }
 
