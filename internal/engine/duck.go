@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"container/list"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -39,8 +40,17 @@ type Duck struct {
 	cachePublishMu  sync.Mutex
 	cachePublishing map[string]bool
 	cacheTransfers  []*batchCacheTransfer
+	// snapshotMu guards the snapshot-compile cache: the most-recently-used list
+	// and its key index. Snapshot compilation is costly (serialize/rewrite/
+	// deserialize through the engine), so compiled relation aliases are kept by
+	// their now window-stable statement text and evicted one entry at a time.
 	snapshotMu      sync.Mutex
-	snapshotQueries map[string]compiledSnapshot
+	snapshotLRU     *list.List // of *snapshotCacheEntry, most recently used first
+	snapshotQueries map[string]*list.Element
+	// snapshotHits and snapshotMisses count the compile cache's lookups so a
+	// benchmark or test can observe its effectiveness; see SnapshotCacheStats.
+	snapshotHits   atomic.Int64
+	snapshotMisses atomic.Int64
 	// DB is the read pool. Reads scan immutable Parquet concurrently, so it is
 	// sized from the machine.
 	DB *sql.DB
@@ -236,6 +246,14 @@ func (d *Duck) runPendingCheckpoint(ctx context.Context) error {
 	}
 	d.recordCheckpointHealth(err)
 	return nil
+}
+
+// SnapshotCacheStats reports the cumulative snapshot-compile cache hits and
+// misses since start. A miss is a statement whose compiled relation aliases
+// had to be built; a hit reused them. It lets a benchmark or test measure the
+// cache hit rate, which window-stable statement text is meant to raise.
+func (d *Duck) SnapshotCacheStats() (hits, misses int64) {
+	return d.snapshotHits.Load(), d.snapshotMisses.Load()
 }
 
 const (

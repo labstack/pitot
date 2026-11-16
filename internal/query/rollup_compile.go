@@ -111,21 +111,30 @@ func rollupRankingSQL(extra string, m Measure, seconds float64) (string, string,
 	return value, samples, extra
 }
 
-func coveredSecondsSQL(scope Scope, bucket string, totals bool) string {
+// coveredSecondsSQL returns the covered-seconds expression and the window
+// bound values it reads, in the left-to-right order of the ? placeholders it
+// emits. The start, FreshTo-clamped end and whole-window duration ride as bind
+// parameters rather than rendered literals so the compiled statement text is
+// identical across time windows of the same panel, which lets the snapshot
+// compile cache hit instead of reparsing a per-request string. The bucket
+// width stays a literal: it is constant for a fixed relative range, so it does
+// not vary the text. Every returned value corresponds to exactly one emitted
+// placeholder, so callers append them positionally and the arg count matches.
+func coveredSecondsSQL(scope Scope, bucket string, totals bool) (string, []any) {
 	end := scope.End
 	if !scope.FreshTo.IsZero() && scope.FreshTo.Before(end) {
 		end = scope.FreshTo
 	}
 	startNS, endNS := scope.Start.UnixNano(), end.UnixNano()
-	full := sqlFloat(max(0, end.Sub(scope.Start).Seconds()))
+	full := max(0, end.Sub(scope.Start).Seconds())
 	if bucket == "" {
-		return full
+		return "?::DOUBLE", []any{full}
 	}
-	covered := fmt.Sprintf("greatest(0.0, (least(%d::BIGINT, epoch_ns(%s)+%d::BIGINT)-greatest(%d::BIGINT,epoch_ns(%s)))/1000000000.0)", endNS, bucket, scope.Interval.Nanoseconds(), startNS, bucket)
+	covered := fmt.Sprintf("greatest(0.0, (least(?::BIGINT, epoch_ns(%s)+%d::BIGINT)-greatest(?::BIGINT,epoch_ns(%s)))/1000000000.0)", bucket, scope.Interval.Nanoseconds(), bucket)
 	if totals {
-		return "CASE WHEN grouping(" + bucket + ")=1 THEN " + full + " ELSE " + covered + " END"
+		return "CASE WHEN grouping(" + bucket + ")=1 THEN ?::DOUBLE ELSE " + covered + " END", []any{full, endNS, startNS}
 	}
-	return covered
+	return covered, []any{endNS, startNS}
 }
 
 // Endpoint routing deliberately accepts only the nonempty-route population,

@@ -254,10 +254,20 @@ func compileAggregateQuery(p *Panel, measures []Measure, filters []Filter, scope
 	}
 	hasTotals := bucket != "" && (p.Viz == "stat" || p.Viz == "gauge")
 	quantiles := map[int]Measure{}
+	// Rolled rate measures read the covered-seconds window bounds as bind
+	// parameters. They appear in the measure projection, which the engine
+	// renders after the base CTE's own window placeholders and before no other
+	// placeholder, so these arrive after args in textual order. Only rate
+	// embeds the expression, so its parameters ride along exactly when the
+	// placeholder survived into the measure text.
+	var measureArgs []any
 	for _, m := range measures {
 		expr := measureExprSQL(m, sig, seconds, partition)
+		var coveredArgs []any
 		if rolled {
-			expr = rollupMeasureSQL(m, coveredSecondsSQL(scope, bucket, hasTotals), partition)
+			var covered string
+			covered, coveredArgs = coveredSecondsSQL(scope, bucket, hasTotals)
+			expr = rollupMeasureSQL(m, covered, partition)
 		} else if hasTotals {
 			expr = strings.ReplaceAll(expr, "count(*) / "+sqlFloat(seconds), "count(*) / (CASE WHEN grouping("+bucket+")=1 THEN "+sqlFloat(scope.End.Sub(scope.Start).Seconds())+" ELSE "+sqlFloat(seconds)+" END)")
 		}
@@ -266,12 +276,16 @@ func compileAggregateQuery(p *Panel, measures []Measure, filters []Filter, scope
 			expr = "NULL::DOUBLE"
 		}
 		selects = append(selects, expr+" AS "+quoteIdent(m.Alias))
+		if rolled && strings.Contains(expr, "?") {
+			measureArgs = append(measureArgs, coveredArgs...)
+		}
 		unit := m.Unit
 		if unit == "none" {
 			unit = "" // The catalog cannot infer a physical unit for this field.
 		}
 		columns = append(columns, Column{Name: m.Alias, Type: "number", Role: "measure", Unit: unit})
 	}
+	args = append(args, measureArgs...)
 	var b strings.Builder
 	var ranking *Ranking
 	rankingFloor := false

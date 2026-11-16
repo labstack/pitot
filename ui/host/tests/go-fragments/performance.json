@@ -220,7 +220,7 @@
         ],
         "rows": 1
       },
-      "sql": "WITH base AS (SELECT * FROM span_rollup WHERE \"bucket\" \u003e= ?::TIMESTAMP_NS AND \"bucket\" \u003c ?::TIMESTAMP_NS AND ((namespace = 'shop'))) SELECT epoch_ms(time_bucket(INTERVAL '60 seconds', \"bucket\"::TIMESTAMP_NS))::BIGINT AS \"_t\", coalesce(sum(spans),0) / nullif(greatest(0.0, (least(1791402300000000000::BIGINT, epoch_ns(time_bucket(INTERVAL '60 seconds', \"bucket\"::TIMESTAMP_NS))+60000000000::BIGINT)-greatest(1791398700000000000::BIGINT,epoch_ns(time_bucket(INTERVAL '60 seconds', \"bucket\"::TIMESTAMP_NS))))/1000000000.0),0) AS \"rate\" FROM base GROUP BY time_bucket(INTERVAL '60 seconds', \"bucket\"::TIMESTAMP_NS) ORDER BY \"_t\" LIMIT 14000",
+      "sql": "WITH base AS (SELECT * FROM span_rollup WHERE \"bucket\" \u003e= ?::TIMESTAMP_NS AND \"bucket\" \u003c ?::TIMESTAMP_NS AND ((namespace = 'shop'))) SELECT epoch_ms(time_bucket(INTERVAL '60 seconds', \"bucket\"::TIMESTAMP_NS))::BIGINT AS \"_t\", coalesce(sum(spans),0) / nullif(greatest(0.0, (least(?::BIGINT, epoch_ns(time_bucket(INTERVAL '60 seconds', \"bucket\"::TIMESTAMP_NS))+60000000000::BIGINT)-greatest(?::BIGINT,epoch_ns(time_bucket(INTERVAL '60 seconds', \"bucket\"::TIMESTAMP_NS))))/1000000000.0),0) AS \"rate\" FROM base GROUP BY time_bucket(INTERVAL '60 seconds', \"bucket\"::TIMESTAMP_NS) ORDER BY \"_t\" LIMIT 14000",
       "interval": "1m",
       "elapsed_ms": 0,
       "from_ms": 1791398700000,
