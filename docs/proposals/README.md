@@ -38,5 +38,10 @@ Earlier proposals predate the template and keep their original structure.
 | 0004 | [Full UI without an LLM key, and PitotQL](0004-pitotql.md) | Accepted |
 | 0005 | [Dedicated attribute columns and batch format 5](0005-dedicated-attribute-columns.md) | Accepted |
 | 0006 | [Read performance under sustained ingest](0006-read-performance.md) | Draft |
+| 0007 | [Additive per-batch rollup aggregates](0007-additive-rollup-aggregates.md) | Draft |
+| 0008 | [Mergeable latency sketch and derived service rollup](0008-mergeable-latency-sketch.md) | Draft |
+| 0009 | [Manifest catalog, write-ahead log, and parallel compaction](0009-manifest-catalog-wal-compaction.md) | Draft |
+| 0010 | [Result-cache key normalization and an extent cache](0010-result-cache-extent-key.md) | Draft |
+| 0011 | [One cost-aware admission layer at the engine boundary](0011-engine-admission-classes.md) | Draft |
 
 Settled decisions that a proposal leads to are recorded in [../adr](../adr/README.md).
