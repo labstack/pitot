@@ -11,68 +11,69 @@ license does not replace or alter those terms.
 COMPONENT INVENTORY
 ===================
 
-- Go: cel.dev/cel-go v0.32.0
-- Go: cel.dev/expr v0.25.3
-- Go: github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260930215002-015baf5dc150
+- Go: cel.dev/cel-go v0.33.2
+- Go: cel.dev/expr v0.26.0
+- Go: github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20261116152133-344d21fcc1bc
 - Go: github.com/alexedwards/scs/v2 v2.9.0
-- Go: github.com/andybalholm/brotli v1.2.6
+- Go: github.com/andybalholm/brotli v1.3.0
 - Go: github.com/antlr4-go/antlr/v4 v4.13.1
 - Go: github.com/beorn7/perks v1.0.1
 - Go: github.com/cespare/xxhash/v2 v2.3.0
 - Go: github.com/coreos/go-oidc/v3 v3.21.0
-- Go: github.com/duckdb/duckdb-go-bindings v0.10506.0
-- Go: github.com/duckdb/duckdb-go/v2 v2.10506.0
+- Go: github.com/duckdb/duckdb-go-bindings v0.20000.0
+- Go: github.com/duckdb/duckdb-go/v2 v2.20000.0
 - Go: github.com/dustin/go-humanize v1.1.0
-- Go: github.com/go-jose/go-jose/v4 v4.1.6
+- Go: github.com/go-jose/go-jose/v4 v4.1.9
 - Go: github.com/go-viper/mapstructure/v2 v2.5.0
 - Go: github.com/google/jsonschema-go v0.4.3
 - Go: github.com/google/uuid v1.6.0
-- Go: github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0
-- Go: github.com/klauspost/compress v1.20.3
-- Go: github.com/klauspost/cpuid/v2 v2.4.0
-- Go: github.com/labstack/echo/v5 v5.4.2
+- Go: github.com/grpc-ecosystem/grpc-gateway/v2 v2.33.0
+- Go: github.com/klauspost/compress v1.20.4
+- Go: github.com/klauspost/cpuid/v2 v2.4.2
+- Go: github.com/labstack/echo/v5 v5.4.6
 - Go: github.com/mattn/go-isatty v0.0.24
-- Go: github.com/mfridman/interpolate v0.0.2
+- Go: github.com/mfridman/interpolate v0.2.0
 - Go: github.com/modelcontextprotocol/go-sdk v1.8.0
 - Go: github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
 - Go: github.com/ncruces/go-strftime v1.1.0
+- Go: github.com/pandatix/go-abnf v0.5.5
 - Go: github.com/parquet-go/bitpack v1.1.0
 - Go: github.com/parquet-go/jsonlite v1.5.5
 - Go: github.com/parquet-go/parquet-go v0.32.0
 - Go: github.com/pierrec/lz4/v4 v4.1.33
-- Go: github.com/pressly/goose/v3 v3.29.0
+- Go: github.com/pressly/goose/v3 v3.30.1
 - Go: github.com/prometheus/client_golang v1.25.0
 - Go: github.com/prometheus/client_model v0.6.3
-- Go: github.com/prometheus/common v0.72.0
-- Go: github.com/prometheus/procfs v0.22.0
+- Go: github.com/prometheus/common v0.74.0
+- Go: github.com/prometheus/procfs v0.23.0
 - Go: github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec
 - Go: github.com/segmentio/asm v1.2.1
 - Go: github.com/segmentio/encoding v0.5.4
 - Go: github.com/sethvargo/go-retry v0.5.0
 - Go: github.com/sirupsen/logrus v1.10.2
 - Go: github.com/twpayne/go-geom v1.7.0
-- Go: github.com/wneessen/go-mail v0.8.1
+- Go: github.com/wneessen/go-mail v0.8.2
 - Go: github.com/yosida95/uritemplate/v3 v3.0.2
 - Go: github.com/zeebo/xxh3 v1.1.0
 - Go: go.opentelemetry.io/proto/otlp v1.11.1
 - Go: go.uber.org/multierr v1.11.0
-- Go: go.yaml.in/yaml/v3 v3.0.5
-- Go: golang.org/x/crypto v0.58.0
-- Go: golang.org/x/exp v0.0.0-20261011100332-faecfb24eb49
+- Go: go.yaml.in/yaml/v3 v3.0.6
+- Go: golang.org/x/crypto v0.59.0
+- Go: golang.org/x/exp v0.0.0-20261113113407-e3970619a1a4
 - Go: golang.org/x/net v0.62.0
-- Go: golang.org/x/oauth2 v0.37.0
-- Go: golang.org/x/sync v0.24.0
-- Go: golang.org/x/sys v0.49.0
-- Go: golang.org/x/text v0.43.0
+- Go: golang.org/x/oauth2 v0.38.0
+- Go: golang.org/x/sync v0.25.0
+- Go: golang.org/x/sys v0.50.0
+- Go: golang.org/x/text v0.44.0
 - Go: golang.org/x/time v0.16.0
-- Go: google.golang.org/genproto/googleapis/api v0.0.0-20261005182115-fad411399dd8
-- Go: google.golang.org/genproto/googleapis/rpc v0.0.0-20261005182115-fad411399dd8
-- Go: google.golang.org/grpc v1.84.0
+- Go: google.golang.org/genproto/googleapis/api v0.0.0-20261110000943-09e21b237f2c
+- Go: google.golang.org/genproto/googleapis/rpc v0.0.0-20261110000943-09e21b237f2c
+- Go: google.golang.org/grpc v1.85.0
 - Go: google.golang.org/protobuf v1.36.12
-- Go: modernc.org/libc v1.79.0
+- Go: modernc.org/libc v1.81.2
 - Go: modernc.org/mathutil v1.7.1
-- Go: modernc.org/memory v1.12.1
-- Go: modernc.org/sqlite v1.61.0
+- Go: modernc.org/memory v1.13.0
+- Go: modernc.org/sqlite v1.62.0
 - Native: DuckDB v2.0.0 (d54cbbe3df)
 - npm: @ag-ui/client 1.0.4 (declared license: MIT)
 - npm: @ag-ui/core 1.0.4 (declared license: MIT)
@@ -299,7 +300,7 @@ LICENSE AND NOTICE TEXTS
 ========================
 
 --- Applies to -------------------------------------------------------------
-- Go: cel.dev/cel-go v0.32.0 / LICENSE
+- Go: cel.dev/cel-go v0.33.2 / LICENSE
 ----------------------------------------------------------------------------
 
 Apache License
@@ -536,17 +537,17 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: cel.dev/expr v0.25.3 / LICENSE
-- Go: github.com/go-jose/go-jose/v4 v4.1.6 / LICENSE
+- Go: cel.dev/expr v0.26.0 / LICENSE
+- Go: github.com/go-jose/go-jose/v4 v4.1.9 / LICENSE
 - Go: github.com/prometheus/client_golang v1.25.0 / LICENSE
 - Go: github.com/prometheus/client_model v0.6.3 / LICENSE
-- Go: github.com/prometheus/common v0.72.0 / LICENSE
-- Go: github.com/prometheus/procfs v0.22.0 / LICENSE
+- Go: github.com/prometheus/common v0.74.0 / LICENSE
+- Go: github.com/prometheus/procfs v0.23.0 / LICENSE
 - Go: github.com/sethvargo/go-retry v0.5.0 / LICENSE
 - Go: go.opentelemetry.io/proto/otlp v1.11.1 / LICENSE
-- Go: google.golang.org/genproto/googleapis/api v0.0.0-20261005182115-fad411399dd8 / LICENSE
-- Go: google.golang.org/genproto/googleapis/rpc v0.0.0-20261005182115-fad411399dd8 / LICENSE
-- Go: google.golang.org/grpc v1.84.0 / LICENSE
+- Go: google.golang.org/genproto/googleapis/api v0.0.0-20261110000943-09e21b237f2c / LICENSE
+- Go: google.golang.org/genproto/googleapis/rpc v0.0.0-20261110000943-09e21b237f2c / LICENSE
+- Go: google.golang.org/grpc v1.85.0 / LICENSE
 - npm: @protobuf-ts/protoc 2.11.1 / supplemental/LICENSE
 ----------------------------------------------------------------------------
 
@@ -753,7 +754,7 @@ Apache License
    limitations under the License.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260930215002-015baf5dc150 / LICENSE
+- Go: github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20261116152133-344d21fcc1bc / LICENSE
 - npm: @ag-ui/client 1.0.4 / LICENSE
 - npm: @ag-ui/core 1.0.4 / LICENSE
 - npm: @ag-ui/encoder 1.0.4 / LICENSE
@@ -809,7 +810,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/andybalholm/brotli v1.2.6 / LICENSE
+- Go: github.com/andybalholm/brotli v1.3.0 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
@@ -1134,7 +1135,7 @@ This product includes software developed at CoreOS, Inc.
 (http://www.coreos.com/).
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/duckdb/duckdb-go-bindings v0.10506.0 / LICENSE
+- Go: github.com/duckdb/duckdb-go-bindings v0.20000.0 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright 2018-2026 Stichting DuckDB Foundation
@@ -1146,7 +1147,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/duckdb/duckdb-go/v2 v2.10506.0 / LICENSE
+- Go: github.com/duckdb/duckdb-go/v2 v2.20000.0 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright 2019-2024 Marc Boeker
@@ -1269,7 +1270,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 / LICENSE
+- Go: github.com/grpc-ecosystem/grpc-gateway/v2 v2.33.0 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright (c) 2015, Gengo, Inc.
@@ -1301,7 +1302,7 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/klauspost/compress v1.20.3 / LICENSE
+- Go: github.com/klauspost/compress v1.20.4 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright (c) 2012 The Go Authors. All rights reserved.
@@ -1610,7 +1611,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/klauspost/cpuid/v2 v2.4.0 / LICENSE
+- Go: github.com/klauspost/cpuid/v2 v2.4.2 / LICENSE
 ----------------------------------------------------------------------------
 
 The MIT License (MIT)
@@ -1636,7 +1637,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/labstack/echo/v5 v5.4.2 / LICENSE
+- Go: github.com/labstack/echo/v5 v5.4.6 / LICENSE
 ----------------------------------------------------------------------------
 
 The MIT License (MIT)
@@ -1676,7 +1677,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/mfridman/interpolate v0.0.2 / LICENSE.txt
+- Go: github.com/mfridman/interpolate v0.2.0 / LICENSE.txt
 ----------------------------------------------------------------------------
 
 MIT License
@@ -1968,6 +1969,32 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 MIT License
 
 Copyright (c) 2022 Nuno Cruces
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--- Applies to -------------------------------------------------------------
+- Go: github.com/pandatix/go-abnf v0.5.5 / LICENSE
+----------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2024 Lucas TESSON - PandatiX <lucastesson@protonmail.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -2469,7 +2496,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/pressly/goose/v3 v3.29.0 / LICENSE
+- Go: github.com/pressly/goose/v3 v3.30.1 / LICENSE
 ----------------------------------------------------------------------------
 
 MIT License
@@ -2529,7 +2556,7 @@ This product includes software developed at
 SoundCloud Ltd. (http://soundcloud.com/).
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/prometheus/common v0.72.0 / NOTICE
+- Go: github.com/prometheus/common v0.74.0 / NOTICE
 ----------------------------------------------------------------------------
 
 Common libraries shared by Prometheus Go components.
@@ -2539,7 +2566,7 @@ This product includes software developed at
 SoundCloud Ltd. (http://soundcloud.com/).
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/prometheus/procfs v0.22.0 / NOTICE
+- Go: github.com/prometheus/procfs v0.23.0 / NOTICE
 ----------------------------------------------------------------------------
 
 procfs provides functions to retrieve system, kernel and process
@@ -2684,7 +2711,7 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: github.com/wneessen/go-mail v0.8.1 / LICENSE
+- Go: github.com/wneessen/go-mail v0.8.2 / LICENSE
 ----------------------------------------------------------------------------
 
 MIT License
@@ -2797,7 +2824,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 --- Applies to -------------------------------------------------------------
-- Go: go.yaml.in/yaml/v3 v3.0.5 / LICENSE
+- Go: go.yaml.in/yaml/v3 v3.0.6 / LICENSE
 ----------------------------------------------------------------------------
 
 This project is covered by two different licenses: MIT and Apache.
@@ -2851,7 +2878,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 --- Applies to -------------------------------------------------------------
-- Go: go.yaml.in/yaml/v3 v3.0.5 / NOTICE
+- Go: go.yaml.in/yaml/v3 v3.0.6 / NOTICE
 ----------------------------------------------------------------------------
 
 Copyright 2011-2016 Canonical Ltd.
@@ -2869,13 +2896,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 --- Applies to -------------------------------------------------------------
-- Go: golang.org/x/crypto v0.58.0 / LICENSE
-- Go: golang.org/x/exp v0.0.0-20261011100332-faecfb24eb49 / LICENSE
+- Go: golang.org/x/crypto v0.59.0 / LICENSE
+- Go: golang.org/x/exp v0.0.0-20261113113407-e3970619a1a4 / LICENSE
 - Go: golang.org/x/net v0.62.0 / LICENSE
-- Go: golang.org/x/oauth2 v0.37.0 / LICENSE
-- Go: golang.org/x/sync v0.24.0 / LICENSE
-- Go: golang.org/x/sys v0.49.0 / LICENSE
-- Go: golang.org/x/text v0.43.0 / LICENSE
+- Go: golang.org/x/oauth2 v0.38.0 / LICENSE
+- Go: golang.org/x/sync v0.25.0 / LICENSE
+- Go: golang.org/x/sys v0.50.0 / LICENSE
+- Go: golang.org/x/text v0.44.0 / LICENSE
 - Go: golang.org/x/time v0.16.0 / LICENSE
 ----------------------------------------------------------------------------
 
@@ -2908,7 +2935,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: google.golang.org/grpc v1.84.0 / NOTICE.txt
+- Go: google.golang.org/grpc v1.85.0 / NOTICE.txt
 ----------------------------------------------------------------------------
 
 Copyright 2014 gRPC authors.
@@ -2958,7 +2985,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/libc v1.79.0 / LICENSE
+- Go: modernc.org/libc v1.81.2 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright (c) 2017 The Libc Authors. All rights reserved.
@@ -2990,7 +3017,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/libc v1.79.0 / LICENSE-3RD-PARTY.md
+- Go: modernc.org/libc v1.81.2 / LICENSE-3RD-PARTY.md
 ----------------------------------------------------------------------------
 
 # Third-Party Software Notices
@@ -3332,7 +3359,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/memory v1.12.1 / LICENSE
+- Go: modernc.org/memory v1.13.0 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright (c) 2017 The Memory Authors. All rights reserved.
@@ -3364,7 +3391,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/memory v1.12.1 / LICENSE-GO
+- Go: modernc.org/memory v1.13.0 / LICENSE-GO
 ----------------------------------------------------------------------------
 
 Copyright (c) 2009 The Go Authors. All rights reserved.
@@ -3396,13 +3423,13 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/memory v1.12.1 / LICENSE-LOGO
+- Go: modernc.org/memory v1.13.0 / LICENSE-LOGO
 ----------------------------------------------------------------------------
 
 https://commons.wikimedia.org/wiki/File:Memory_infra_logo.png
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/memory v1.12.1 / LICENSE-MMAP-GO
+- Go: modernc.org/memory v1.13.0 / LICENSE-MMAP-GO
 ----------------------------------------------------------------------------
 
 Copyright (c) 2011, Evan Shaw <edsrzf@gmail.com>
@@ -3431,7 +3458,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/sqlite v1.61.0 / LICENSE
+- Go: modernc.org/sqlite v1.62.0 / LICENSE
 ----------------------------------------------------------------------------
 
 Copyright (c) 2017 The Sqlite Authors. All rights reserved.
@@ -3462,7 +3489,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/sqlite v1.61.0 / LICENSE-3RD-PARTY.md
+- Go: modernc.org/sqlite v1.62.0 / LICENSE-3RD-PARTY.md
 ----------------------------------------------------------------------------
 
 # Third-Party Licenses
@@ -3510,7 +3537,7 @@ and license texts it points at are the ones you have to carry with you.
 | [Go](https://github.com/golang/go) | -- | BSD-3-Clause | modernc.org/libc | [N1](#N1) |
 | [go-netdb](https://github.com/dominikh/go-netdb) | -- | MIT | modernc.org/libc | [N1](#N1) |
 | [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys) | v0.49.0 | BSD-3-Clause | github.com/google/pprof, github.com/mattn/go-isatty, modernc.org/libc, modernc.org/memory, `go.mod` | [L3](#L3) |
-| [modernc.org/libc](https://pkg.go.dev/modernc.org/libc) | v1.79.0 | BSD-3-Clause | `go.mod` | [L4](#L4) |
+| [modernc.org/libc](https://pkg.go.dev/modernc.org/libc) | v1.80.1 | BSD-3-Clause | `go.mod` | [L4](#L4) |
 | [modernc.org/mathutil](https://pkg.go.dev/modernc.org/mathutil) | v1.7.1 | BSD-3-Clause | modernc.org/fileutil, modernc.org/libc, modernc.org/memory, `go.mod` | [L4](#L4) |
 | [modernc.org/memory](https://pkg.go.dev/modernc.org/memory) | v1.12.1 | BSD-3-Clause, attribution reference | modernc.org/libc, `go.mod` | [L4](#L4), [L2](#L2), [L5](#L5), [L6](#L6) |
 | [musl libc](https://musl.libc.org/) | -- | MIT | modernc.org/libc | [N1](#N1) |
@@ -3555,8 +3582,8 @@ this one.
 | [golang.org/x/mod](https://pkg.go.dev/golang.org/x/mod) | v0.42.0 | BSD-3-Clause | modernc.org/libc | [L3](#L3) |
 | [golang.org/x/sync](https://pkg.go.dev/golang.org/x/sync) | v0.24.0 | BSD-3-Clause | modernc.org/libc | [L3](#L3) |
 | [golang.org/x/tools](https://pkg.go.dev/golang.org/x/tools) | v0.52.0 | BSD-3-Clause | modernc.org/libc | [L3](#L3) |
-| [modernc.org/cc/v4](https://pkg.go.dev/modernc.org/cc/v4) | v4.30.3 | BSD-3-Clause | modernc.org/libc | [L4](#L4) |
-| [modernc.org/ccgo/v4](https://pkg.go.dev/modernc.org/ccgo/v4) | v4.37.0 | BSD-3-Clause | modernc.org/libc | [L4](#L4) |
+| [modernc.org/cc/v4](https://pkg.go.dev/modernc.org/cc/v4) | v4.30.6-0.20261101114202-1b9d1a076f6b | BSD-3-Clause | modernc.org/libc | [L4](#L4) |
+| [modernc.org/ccgo/v4](https://pkg.go.dev/modernc.org/ccgo/v4) | v4.38.1 | BSD-3-Clause | modernc.org/libc | [L4](#L4) |
 | [modernc.org/gc/v2](https://pkg.go.dev/modernc.org/gc/v2) | v2.6.5 | BSD-3-Clause | modernc.org/libc | [L16](#L16) |
 | [modernc.org/gc/v3](https://pkg.go.dev/modernc.org/gc/v3) | v3.2.0 | BSD-3-Clause | modernc.org/libc | [L16](#L16) |
 | [modernc.org/goabi0](https://pkg.go.dev/modernc.org/goabi0) | v0.2.0 | BSD-3-Clause | modernc.org/libc | [L17](#L17) |
@@ -5081,7 +5108,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ---
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/sqlite v1.61.0 / LICENSE-SQLITE
+- Go: modernc.org/sqlite v1.62.0 / LICENSE-SQLITE
 ----------------------------------------------------------------------------
 
 SQLite Is Public Domain
@@ -5111,7 +5138,7 @@ public domain dedications on file. So the SQLite code base is clean and is
 uncontaminated with licensed code from other projects.
 
 --- Applies to -------------------------------------------------------------
-- Go: modernc.org/sqlite v1.61.0 / LICENSE-SQLITE_VEC
+- Go: modernc.org/sqlite v1.62.0 / LICENSE-SQLITE_VEC
 ----------------------------------------------------------------------------
 
 MIT License
