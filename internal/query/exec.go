@@ -952,6 +952,9 @@ func (e *Executor) runScope(ctx context.Context, p *Panel, checked *Checked, sco
 	if err != nil {
 		return nil, "", err
 	}
+	// Carry the panel's windowed columns so the engine prunes a raw signal's
+	// files only when the statement bounds that signal's own event-time clock.
+	ctx = queryrows.WithWindowColumns(ctx, plan.windowColumns)
 	patterns := plan.patterns
 	query, _, args, err := bindParams(plan.canonical, func(name string) ([]any, bool, error) {
 		switch name {

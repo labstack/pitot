@@ -15,10 +15,14 @@ type sqlPanelPlan struct {
 	canonical, prepared string
 	serialized          []bool
 	patterns            map[string]bool
+	// windowColumns are the columns the panel's $__window macros bound, in
+	// expansion order. File pruning binds every captured file for any raw
+	// signal whose event-time clock is absent from this set.
+	windowColumns []string
 }
 
 func (e *Executor) sqlPanel(ctx context.Context, source string, interval time.Duration) (sqlPanelPlan, error) {
-	expanded, err := expandMacros(source, interval)
+	expanded, windowColumns, err := expandMacros(source, interval)
 	if err != nil {
 		return sqlPanelPlan{}, err
 	}
@@ -49,7 +53,7 @@ func (e *Executor) sqlPanel(ctx context.Context, source string, interval time.Du
 	if err != nil {
 		return sqlPanelPlan{}, err
 	}
-	plan = sqlPanelPlan{canonical: canonical, prepared: prepared, serialized: serialized, patterns: engine.PatternParams(node)}
+	plan = sqlPanelPlan{canonical: canonical, prepared: prepared, serialized: serialized, patterns: engine.PatternParams(node), windowColumns: windowColumns}
 	e.mu.Lock()
 	if e.sqlPanels == nil || len(e.sqlPanels) >= 128 {
 		e.sqlPanels = map[string]sqlPanelPlan{}

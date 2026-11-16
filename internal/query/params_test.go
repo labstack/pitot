@@ -43,7 +43,7 @@ func TestBindParams(t *testing.T) {
 }
 
 func TestExpandMacros(t *testing.T) {
-	out, err := expandMacros("SELECT $__bucket(s.start_time) AS t, count(*) FROM spans s WHERE $__window(s.start_time) GROUP BY 1", 5*time.Minute)
+	out, columns, err := expandMacros("SELECT $__bucket(s.start_time) AS t, count(*) FROM spans s WHERE $__window(s.start_time) GROUP BY 1", 5*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,10 +51,13 @@ func TestExpandMacros(t *testing.T) {
 	if out != want {
 		t.Fatalf("got  %s\nwant %s", out, want)
 	}
-	if _, err := expandMacros("SELECT count(*) FROM spans", time.Minute); err == nil || !strings.Contains(err.Error(), "$__window") {
+	if len(columns) != 1 || columns[0] != "s.start_time" {
+		t.Fatalf("windowed columns = %v, want [s.start_time]", columns)
+	}
+	if _, _, err := expandMacros("SELECT count(*) FROM spans", time.Minute); err == nil || !strings.Contains(err.Error(), "$__window") {
 		t.Fatalf("missing window macro err = %v", err)
 	}
-	if _, err := expandMacros("SELECT $__interval FROM spans WHERE $__window(start_time)", time.Minute); err == nil {
+	if _, _, err := expandMacros("SELECT $__interval FROM spans WHERE $__window(start_time)", time.Minute); err == nil {
 		t.Fatal("unknown macro accepted")
 	}
 }

@@ -20,6 +20,23 @@ type Window struct {
 
 type windowKey struct{}
 type inventoryWindowKey struct{}
+type windowColumnsKey struct{}
+
+// WithWindowColumns records the exact columns a trusted SQL panel bounds with
+// the read window, captured at macro expansion where each column is
+// unambiguous. A raw signal is event-time pruned by the window only when one of
+// these columns is that signal's own event-time clock; a window on any other
+// column (or on another relation joined to it) binds every captured file for
+// the signal instead of silently dropping rows. Absent entirely, every raw
+// signal keeps its default clock-based pruning.
+func WithWindowColumns(ctx context.Context, columns []string) context.Context {
+	return context.WithValue(ctx, windowColumnsKey{}, columns)
+}
+
+func ReadWindowColumns(ctx context.Context) ([]string, bool) {
+	columns, ok := ctx.Value(windowColumnsKey{}).([]string)
+	return columns, ok
+}
 
 // WithInventoryWindow records the logical panel interval before file lookback
 // expansion. It is independent of the raw-file read window and read kind.
