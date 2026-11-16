@@ -114,25 +114,19 @@ it("includes the iframe in the full-screen Tab and Shift+Tab cycle with Close an
     await act(async()=>new Promise(resolve=>setTimeout(resolve,10)));
     const close=view.container.querySelector<HTMLButtonElement>('[aria-label="Close analysis view"]')!;
     expect(frame.getAttribute("tabindex")).toBe("0");
+    // The iframe is the only other tabbable in the overlay, so Tab and Shift+Tab
+    // from Close both reach it. The focus trap keeps the move inside the overlay;
+    // the iframe and Close are the whole cycle.
     close.focus();
-    const forward=new KeyboardEvent("keydown",{key:"Tab",bubbles:true,cancelable:true});
-    await act(async()=>close.dispatchEvent(forward));
-    // An unhandled native Tab enters the iframe's first tabbable control.
-    expect(forward.defaultPrevented).toBe(false);
-    frame.focus();
-    const exit=new KeyboardEvent("keydown",{key:"Tab",bubbles:true,cancelable:true});
-    await act(async()=>frame.dispatchEvent(exit));
-    expect(exit.defaultPrevented).toBe(true);expect(document.activeElement).toBe(close);
-    const reverse=new KeyboardEvent("keydown",{key:"Tab",shiftKey:true,bubbles:true,cancelable:true});
-    await act(async()=>close.dispatchEvent(reverse));
-    expect(reverse.defaultPrevented).toBe(true);expect(document.activeElement).toBe(frame);
-    const back=new KeyboardEvent("keydown",{key:"Tab",shiftKey:true,bubbles:true,cancelable:true});
-    await act(async()=>frame.dispatchEvent(back));expect(back.defaultPrevented).toBe(false);
-    // happy-dom does not run native Tab navigation; the browser moves back to Close.
+    await act(async()=>close.dispatchEvent(new KeyboardEvent("keydown",{key:"Tab",bubbles:true,cancelable:true})));
+    expect(document.activeElement).toBe(frame);
+    close.focus();
+    await act(async()=>close.dispatchEvent(new KeyboardEvent("keydown",{key:"Tab",shiftKey:true,bubbles:true,cancelable:true})));
+    expect(document.activeElement).toBe(frame);
+    // Tab inside the sandboxed iframe reaches the host as native focus leaving it,
+    // not a keydown. Whatever it lands on outside the overlay is brought back to Close.
     const outside=document.createElement("button");document.body.append(outside);
     try {
-      // Tab from the iframe's last inner control dispatches no host keydown.
-      // Its next native focus destination must be brought back into the trap.
       await act(async()=>outside.focus());
       expect(document.activeElement).toBe(close);
     } finally {outside.remove();}
