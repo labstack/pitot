@@ -26,9 +26,12 @@ func ConfigurePolicy(ctx context.Context, db *sql.DB, directories ...string) err
 		"SET allow_community_extensions=false",
 		"SET allowed_directories=[" + strings.Join(paths, ",") + "]",
 		"SET enable_external_access=false",
-		// UTC is set on each newly pooled connection. Public SQL cannot SET
-		// options; memory and worker limits remain available to the operator.
-		"SET allowed_configs=['memory_limit','threads','TimeZone']",
+		// UTC and parquet_metadata_cache are set on each newly pooled connection,
+		// so both must stay settable after the lock. Public SQL cannot change any
+		// other option; memory and worker limits remain available to the operator.
+		// parquet_metadata_cache only caches immutable Parquet footers, so allowing
+		// it does not widen file access or the configuration lockdown.
+		"SET allowed_configs=['memory_limit','threads','TimeZone','parquet_metadata_cache']",
 		"SET lock_configuration=true",
 	}
 	for _, statement := range statements {

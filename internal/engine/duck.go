@@ -502,6 +502,17 @@ func openDuckDB(dsn, tempDir string, maxConns int) (*sql.DB, *sql.DB, *sql.DB, *
 		if _, err := execer.ExecContext(ctx, "SET TimeZone='UTC'", nil); err != nil {
 			return fmt.Errorf("set timezone: %w", err)
 		}
+		// parquet_metadata_cache is a GLOBAL-scoped option, but duckdb-go applies a
+		// SET to the issuing connection only — it does not reach the other pooled
+		// connections, so it must be set on each one here rather than once at boot.
+		// Every read statement binds an explicit per-file Parquet list and a panel
+		// issues several, so caching footers by path+mtime+size avoids re-reading
+		// them per statement. Our batch files are immutable with unique paths, so a
+		// cached footer is never stale. The policy keeps it in allowed_configs so
+		// this SET still succeeds on connections opened after lock_configuration.
+		if _, err := execer.ExecContext(ctx, "SET parquet_metadata_cache=true", nil); err != nil {
+			return fmt.Errorf("set parquet_metadata_cache: %w", err)
+		}
 		tempDirOnce.Do(func() {
 			_, tempDirErr = execer.ExecContext(ctx, "SET temp_directory="+sqlLiteral(tempDir), nil)
 		})
