@@ -36,7 +36,12 @@ func metricBucketWindowCTE(scope Scope) (string, []any) {
 // expansion to at most ceil(metricLookback/interval)+1 bucket rows.
 func metricSpreadCTE(scope Scope) (string, []any) {
 	cte, args := metricBucketWindowCTE(scope)
-	start, end := fmt.Sprint(scope.Start.UnixNano()), fmt.Sprint(scope.End.UnixNano())
+	// The window start and end bind as parameters so metric_intervals' text does
+	// not change with the time window; the bucket width stays a literal because
+	// it is constant for a fixed relative range. Each placeholder is appended in
+	// the order it appears in the clause: _lo (start), _hi (end), then the two
+	// lower-bound predicates (start).
+	startNS, endNS := scope.Start.UnixNano(), scope.End.UnixNano()
 	bucket, lo, hi := "0::BIGINT", "_lo", "_hi"
 	if scope.Interval > 0 {
 		bucket = fmt.Sprintf("i*%d", scope.Interval.Milliseconds())
@@ -53,10 +58,10 @@ func metricSpreadCTE(scope Scope) (string, []any) {
 	lookback := fmt.Sprint(metricLookback.Seconds())
 	cte += `,
       metric_intervals AS (SELECT *,elapsed_s>` + lookback + ` AS _gap,
-        greatest(epoch_ns(_elapsed_from::TIMESTAMP_NS),` + start + `) AS _lo,
-        least(epoch_ns(time::TIMESTAMP_NS),` + end + `) AS _hi
-        FROM metric_deltas WHERE (elapsed_s>0 AND elapsed_s<=` + lookback + ` AND time>make_timestamp_ns(` + start + `)::TIMESTAMPTZ_NS)
-          OR ((elapsed_s IS NULL OR elapsed_s>` + lookback + `) AND time>=make_timestamp_ns(` + start + `)::TIMESTAMPTZ_NS)),
+        greatest(epoch_ns(_elapsed_from::TIMESTAMP_NS),?::BIGINT) AS _lo,
+        least(epoch_ns(time::TIMESTAMP_NS),?::BIGINT) AS _hi
+        FROM metric_deltas WHERE (elapsed_s>0 AND elapsed_s<=` + lookback + ` AND time>make_timestamp_ns(?::BIGINT)::TIMESTAMPTZ_NS)
+          OR ((elapsed_s IS NULL OR elapsed_s>` + lookback + `) AND time>=make_timestamp_ns(?::BIGINT)::TIMESTAMPTZ_NS)),
       metric_interval_buckets AS (SELECT *` + expansion + ` FROM metric_intervals WHERE elapsed_s IS NULL OR _gap OR _hi>_lo),
       metric_overlaps AS (SELECT *,` + bucket + ` AS _spread_bucket,
         CASE WHEN _gap THEN elapsed_s WHEN elapsed_s>0 THEN (` + hi + `-` + lo + `)::DOUBLE/1e9 END AS _covered
@@ -68,6 +73,7 @@ func metricSpreadCTE(scope Scope) (string, []any) {
         CASE WHEN elapsed_s IS NULL OR _gap THEN list_transform(bound_increases,lambda n: n::DOUBLE)
           ELSE list_transform(bound_increases,lambda n: n::DOUBLE*_covered/elapsed_s) END AS bound_increases,
         _covered AS elapsed_s FROM metric_overlaps WHERE elapsed_s IS NULL OR _covered>0)`
+	args = append(args, startNS, endNS, startNS, startNS)
 	return cte, args
 }
 
@@ -75,9 +81,15 @@ func metricSpreadCTE(scope Scope) (string, []any) {
 // those anchors for at most five minutes, then remove covered keys. The work
 // follows gaps in coverage, never a series-by-window grid. Multiple nearby
 // gaps choose the latest completed point for each uncovered key.
-func metricCarryCandidatesCTE(scope Scope, points, covered, eligible string, inclusive bool) string {
-	start := fmt.Sprint(scope.Start.UnixNano())
-	end := fmt.Sprint(scope.End.UnixNano())
+func metricCarryCandidatesCTE(scope Scope, points, covered, eligible string, inclusive bool) (string, []any) {
+	// The window start and end bind as parameters so the carry text is identical
+	// across time windows; bucket math stays literal because the interval is
+	// constant for a fixed relative range. The placeholder string is used
+	// wherever a nanosecond bound was rendered, including inside the bucket-index
+	// helper, which embeds its argument twice. Args are appended in the order the
+	// placeholders appear in the returned text; a non-bucketed scope drops the
+	// two index helpers, so those bounds are omitted then.
+	startP, endP := "?::BIGINT", "?::BIGINT"
 	index, bucket, step := "0::BIGINT", "0::BIGINT", "1"
 	if scope.Interval > 0 {
 		index = fmt.Sprintf("_bucket//%d", scope.Interval.Milliseconds())
@@ -88,17 +100,17 @@ func metricCarryCandidatesCTE(scope Scope, points, covered, eligible string, inc
 	if inclusive {
 		comparison = "<="
 	}
-	return `, metric_covered AS MATERIALIZED (SELECT series_id,_bucket,` + index + ` AS _index,
+	cte := `, metric_covered AS MATERIALIZED (SELECT series_id,_bucket,` + index + ` AS _index,
         max(epoch_ns(time::TIMESTAMP_NS)) AS _last_ns FROM ` + covered + ` WHERE ` + eligible + ` GROUP BY series_id,_bucket),
       metric_carry_anchors AS (SELECT series_id,_index,_last_ns FROM metric_covered c
         WHERE NOT EXISTS (SELECT 1 FROM metric_covered n WHERE n.series_id=c.series_id AND n._bucket=c._bucket+` + step + `)
-        UNION ALL SELECT series_id,` + metricBucketIndexSQL(start, scope.Interval) + `-1 AS _index,
+        UNION ALL SELECT series_id,` + metricBucketIndexSQL(startP, scope.Interval) + `-1 AS _index,
           max(epoch_ns(time::TIMESTAMP_NS)) AS _last_ns FROM ` + points + `
-        WHERE ` + eligible + ` AND time` + comparison + `make_timestamp_ns(` + start + `)::TIMESTAMPTZ_NS
-          AND time>=make_timestamp_ns(` + start + `-300000000000)::TIMESTAMPTZ_NS
+        WHERE ` + eligible + ` AND time` + comparison + `make_timestamp_ns(` + startP + `)::TIMESTAMPTZ_NS
+          AND time>=make_timestamp_ns(` + startP + `-300000000000)::TIMESTAMPTZ_NS
         GROUP BY series_id),
       metric_carry_indexes AS (SELECT series_id,_last_ns,unnest(range(_index+1,
-        least(` + metricBucketIndexSQL(end+"-1", scope.Interval) + `,` +
+        least(` + metricBucketIndexSQL(endP+"-1", scope.Interval) + `,` +
 		metricBucketIndexSQL("_last_ns+300000000000", scope.Interval) + `)+1)) AS i
         FROM metric_carry_anchors),
       metric_carry_candidates AS (SELECT c.series_id AS _sid,` + bucket + ` AS _bucket,max(_last_ns) AS _last_ns
@@ -106,12 +118,27 @@ func metricCarryCandidatesCTE(scope Scope, points, covered, eligible string, inc
         WHERE _last_ns` + comparison + `b._start_ns AND _last_ns>=b._start_ns-300000000000
           AND NOT EXISTS (SELECT 1 FROM metric_covered p WHERE p.series_id=c.series_id AND p._bucket=b._bucket)
         GROUP BY c.series_id,b._bucket,i)`
+	startNS, endNS := scope.Start.UnixNano(), scope.End.UnixNano()
+	var args []any
+	if scope.Interval > 0 {
+		// metricBucketIndexSQL(startP, …) embeds the start bound twice.
+		args = append(args, startNS, startNS)
+	}
+	// The two anchor predicates always read the start bound.
+	args = append(args, startNS, startNS)
+	if scope.Interval > 0 {
+		// metricBucketIndexSQL(endP-1, …) embeds the end bound twice.
+		args = append(args, endNS, endNS)
+	}
+	return cte, args
 }
 
 // Rates alone may extend a completed delta. Covered buckets win outright;
 // a spread delta ending exactly on the boundary covers no new duration.
-func metricRateCarryCTE(scope Scope) string {
-	return metricCarryCandidatesCTE(scope, "metric_deltas", "metric_spread", "elapsed_s>0", true) + `,
+func metricRateCarryCTE(scope Scope) (string, []any) {
+	carry, args := metricCarryCandidatesCTE(scope, "metric_deltas", "metric_spread", "elapsed_s>0", true)
+	// The rate rows below read only columns, so they add no window parameters.
+	return carry + `,
       metric_rate_carry AS (SELECT p.* EXCLUDE (_bucket,increase,count_increase,sum_increase,bound_increases,elapsed_s),
         g._bucket,NULL::DOUBLE AS increase,NULL::DOUBLE AS count_increase,NULL::DOUBLE AS sum_increase,
         NULL::DOUBLE[] AS bound_increases,NULL::DOUBLE AS elapsed_s,
@@ -121,7 +148,7 @@ func metricRateCarryCTE(scope Scope) string {
           ON g._sid=p.series_id AND make_timestamp_ns(g._last_ns)::TIMESTAMPTZ_NS=p.time),
       metric_rate_rows AS (SELECT *,CASE WHEN type='histogram' THEN count_increase ELSE increase END AS _rate_share,
         elapsed_s AS _rate_covered,false AS _carry FROM metric_spread
-        UNION ALL BY NAME SELECT * FROM metric_rate_carry)`
+        UNION ALL BY NAME SELECT * FROM metric_rate_carry)`, args
 }
 
 func metricGaugeCTE(source metricRead, scope Scope, kinds []string) (string, []any, error) {
@@ -130,13 +157,19 @@ func metricGaugeCTE(source metricRead, scope Scope, kinds []string) (string, []a
 		return "", nil, err
 	}
 	window, windowArgs := metricBucketWindowCTE(scope)
-	cte += window + fmt.Sprintf(`, metric_visible_points AS (SELECT p.* FROM metric_points p
-        WHERE time>=make_timestamp_ns(%d)::TIMESTAMPTZ_NS)`, scope.Start.UnixNano())
-	cte += metricCarryCandidatesCTE(scope, "metric_points", "metric_visible_points", "true", false) + `,
+	// The visible-points lower bound binds the window start as a parameter so
+	// this text does not change with the window. Args follow the text order:
+	// the points scan, then the window CTE, then this bound, then the carry.
+	cte += window + `, metric_visible_points AS (SELECT p.* FROM metric_points p
+        WHERE time>=make_timestamp_ns(?::BIGINT)::TIMESTAMPTZ_NS)`
+	carry, carryArgs := metricCarryCandidatesCTE(scope, "metric_points", "metric_visible_points", "true", false)
+	cte += carry + `,
       metric_gauge_carry AS (SELECT p.* EXCLUDE (_bucket),g._bucket,true AS _carry
         FROM metric_carry_candidates g JOIN metric_points p
           ON g._sid=p.series_id AND make_timestamp_ns(g._last_ns)::TIMESTAMPTZ_NS=p.time),
       metric_gauge_rows AS (SELECT *,false AS _carry FROM metric_visible_points UNION ALL BY NAME SELECT * FROM metric_gauge_carry)`
 	args = append(args, windowArgs...)
+	args = append(args, scope.Start.UnixNano())
+	args = append(args, carryArgs...)
 	return cte, args, nil
 }

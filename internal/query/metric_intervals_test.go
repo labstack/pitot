@@ -78,10 +78,11 @@ func TestMetricGapDeltasAttributeWholeIncreaseAndBoundExpansion(t *testing.T) {
 			// execution may automatically widen buckets to respect its limit.
 			var rows, carried, firstBucket, lastBucket int64
 			var minRate, maxRate, totalIncrease float64
-			if err := db.db().QueryRowContext(t.Context(), cte+metricRateCarryCTE(scope)+` SELECT
+			carry, carryArgs := metricRateCarryCTE(scope)
+			if err := db.db().QueryRowContext(t.Context(), cte+carry+` SELECT
                 count(*),count(*) FILTER (WHERE _carry),min(_bucket),max(_bucket),
                 min(_rate_share/_rate_covered),max(_rate_share/_rate_covered),
-                sum(coalesce(increase,count_increase)) FROM metric_rate_rows`, args...).Scan(
+                sum(coalesce(increase,count_increase)) FROM metric_rate_rows`, append(args, carryArgs...)...).Scan(
 				&rows, &carried, &firstBucket, &lastBucket, &minRate, &maxRate, &totalIncrease); err != nil {
 				t.Fatal(err)
 			}

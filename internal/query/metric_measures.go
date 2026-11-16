@@ -170,7 +170,9 @@ func compileMetricQuery(p *Panel, measures []Measure, filters []Filter, scope Sc
 			cte += spread
 			builderArgs = append(builderArgs, spreadArgs...)
 			if needRate {
-				cte += metricRateCarryCTE(scope)
+				carry, carryArgs := metricRateCarryCTE(scope)
+				cte += carry
+				builderArgs = append(builderArgs, carryArgs...)
 				plan = "metric_rate_rows"
 			} else {
 				cte += ", metric_spread_rows AS (SELECT *,false AS _carry FROM metric_spread)"

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"container/list"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -344,43 +345,87 @@ type compiledSnapshot struct {
 	metricNames []string
 }
 
+// snapshotCacheCapacity bounds the compile cache. Reaching it evicts the single
+// least-recently-used entry, so a burst of one-off statements cannot discard
+// the dashboard's stable, repeatedly-run ones.
+const snapshotCacheCapacity = 128
+
+// snapshotCacheEntry is one cached compilation, held in the LRU list under its
+// statement text.
+type snapshotCacheEntry struct {
+	key      string
+	compiled compiledSnapshot
+}
+
+// cachedSnapshot returns a compilation for query and moves it to the front of
+// the LRU when present.
+func (d *Duck) cachedSnapshot(query string) (compiledSnapshot, bool) {
+	d.snapshotMu.Lock()
+	defer d.snapshotMu.Unlock()
+	element, ok := d.snapshotQueries[query]
+	if !ok {
+		return compiledSnapshot{}, false
+	}
+	d.snapshotLRU.MoveToFront(element)
+	return element.Value.(*snapshotCacheEntry).compiled, true
+}
+
+// storeSnapshot records compiled under query at the front of the LRU, evicting
+// the least-recently-used entry once over capacity.
+func (d *Duck) storeSnapshot(query string, compiled compiledSnapshot) {
+	d.snapshotMu.Lock()
+	defer d.snapshotMu.Unlock()
+	if d.snapshotQueries == nil {
+		d.snapshotQueries = map[string]*list.Element{}
+		d.snapshotLRU = list.New()
+	}
+	if element, ok := d.snapshotQueries[query]; ok {
+		element.Value.(*snapshotCacheEntry).compiled = compiled
+		d.snapshotLRU.MoveToFront(element)
+		return
+	}
+	d.snapshotQueries[query] = d.snapshotLRU.PushFront(&snapshotCacheEntry{key: query, compiled: compiled})
+	for d.snapshotLRU.Len() > snapshotCacheCapacity {
+		oldest := d.snapshotLRU.Back()
+		d.snapshotLRU.Remove(oldest)
+		delete(d.snapshotQueries, oldest.Value.(*snapshotCacheEntry).key)
+	}
+}
+
 // compileSnapshot compiles relation aliases once with the native parser. Per-read
 // scopes become ordinary CTEs, avoiding repeated JSON SQL parse/deserialize work.
+// The window bounds ride as bind parameters, so a panel's statement text is
+// identical across time windows and this cache hits instead of recompiling.
 func (d *Duck) compileSnapshot(ctx context.Context, db snapshotSQL, query string) (compiledSnapshot, error) {
-	d.snapshotMu.Lock()
-	compiled, ok := d.snapshotQueries[query]
-	d.snapshotMu.Unlock()
-	if !ok {
-		aliases := map[string]string{}
-		names := []string{"trace_candidates", "trace_tail", "resource_inventory", "receiver_rollup", "receiver_points", "resource_rollup", "receiver_entity_rollup"}
-		for _, s := range telemetry.Signals {
-			names = append(names, "telemetry."+s.Name, s.Name)
-		}
-		for _, name := range names {
-			alias := "__pitot_snapshot_" + strings.ReplaceAll(name, ".", "_")
-			aliases[name] = "SELECT * FROM " + alias
-		}
-		used := map[string]string{}
-		rewritten, err := compileRelations(ctx, db, query, aliases, used)
+	if compiled, ok := d.cachedSnapshot(query); ok {
+		d.snapshotHits.Add(1)
+		return compiled, nil
+	}
+	d.snapshotMisses.Add(1)
+	aliases := map[string]string{}
+	names := []string{"trace_candidates", "trace_tail", "resource_inventory", "receiver_rollup", "receiver_points", "resource_rollup", "receiver_entity_rollup"}
+	for _, s := range telemetry.Signals {
+		names = append(names, "telemetry."+s.Name, s.Name)
+	}
+	for _, name := range names {
+		alias := "__pitot_snapshot_" + strings.ReplaceAll(name, ".", "_")
+		aliases[name] = "SELECT * FROM " + alias
+	}
+	used := map[string]string{}
+	rewritten, err := compileRelations(ctx, db, query, aliases, used)
+	if err != nil {
+		return compiledSnapshot{}, err
+	}
+	// The AST records only rewritten table references, never SQL literals.
+	compiled := compiledSnapshot{query: rewritten, names: used}
+	if _, ok := used["metrics"]; ok {
+		root, err := parseSQLTree(ctx, db, query)
 		if err != nil {
 			return compiledSnapshot{}, err
 		}
-		// The AST records only rewritten table references, never SQL literals.
-		compiled = compiledSnapshot{query: rewritten, names: used}
-		if _, ok := used["metrics"]; ok {
-			root, err := parseSQLTree(ctx, db, query)
-			if err != nil {
-				return compiledSnapshot{}, err
-			}
-			compiled.metricNames = singleMetricNames(root)
-		}
-		d.snapshotMu.Lock()
-		if d.snapshotQueries == nil || len(d.snapshotQueries) >= 128 {
-			d.snapshotQueries = map[string]compiledSnapshot{}
-		}
-		d.snapshotQueries[query] = compiled
-		d.snapshotMu.Unlock()
+		compiled.metricNames = singleMetricNames(root)
 	}
+	d.storeSnapshot(query, compiled)
 	return compiled, nil
 }
 
