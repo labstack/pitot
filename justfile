@@ -228,8 +228,12 @@ ui-boundaries-check:
 # events from Pitot's own authenticated /api/agent/runs, so the worst case is
 # the user's own tab running out of memory. Drop this exception when AG-UI
 # moves to zod 4.6.6 or later.
+# GHSA-fc5q-39xc-vjpf is a ReDoS in picomatch <=4.0.7, reached only as a build
+# and lint dependency of knip, vite, vitest, storybook, and the tanstack router
+# plugin. These match our own static globs, never attacker input, and picomatch
+# has no patched release above 4.0.7. Drop this exception when one ships.
 ui-audit:
-    cd ui/host && bun audit --ignore=GHSA-vfj7-8cjw-p6xm --ignore=GHSA-mrhx-c7xc-m3w5
+    cd ui/host && bun audit --ignore=GHSA-vfj7-8cjw-p6xm --ignore=GHSA-mrhx-c7xc-m3w5 --ignore=GHSA-fc5q-39xc-vjpf
 
 # Compare temporary builds without requiring clean or committed embeds.
 ui-check:
