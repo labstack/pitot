@@ -2,7 +2,7 @@
 
 Status: Draft
 Date: 2026-11-18
-Pull request: TBD
+Pull request: #504
 
 ## Summary
 
