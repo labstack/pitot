@@ -541,9 +541,11 @@ func TestResultCacheAbandonedRunsCompleteAndAreReused(t *testing.T) {
 	release := make(chan struct{})
 	gone, leave := context.WithCancel(t.Context())
 	left := make(chan error, 1)
+	entered := make(chan struct{})
 	go func() {
 		_, _, err := loadCached(e, gone, cacheKey{3}, e.now(), func(run context.Context) (int, int64, bool, error) {
 			markStarted(run) // the run holds a read slot
+			close(entered)
 			select {
 			case <-release:
 				return 5, 8, true, nil
@@ -553,7 +555,8 @@ func TestResultCacheAbandonedRunsCompleteAndAreReused(t *testing.T) {
 		})
 		left <- err
 	}()
-	waitForFlight(t, e, cacheKey{3})
+	// Leave only once the run has started: a queued run is cancelled instead.
+	<-entered
 	leave()
 	if err := <-left; !errors.Is(err, context.Canceled) {
 		t.Fatalf("departed caller err=%v", err)
