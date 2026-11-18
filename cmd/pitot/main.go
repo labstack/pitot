@@ -298,8 +298,15 @@ func main() {
 	// typed query kernel through deterministic HTTP or standard MCP tools.
 	// Route both HTTP and MCP reads through Duck's retrying adapter. Passing the
 	// raw *sql.DB here bypassed the Telemetry maintenance-race protection.
-	queries := observability.New(q, q, cfg.RetentionDays)
 	panels := query.NewExecutor(q, cfg.RetentionDays)
+	// Observability reads reached through the executor (the dashboard panels'
+	// rollup reader and trace detail) are already admitted by the executor, so
+	// they use the raw engine; admitting them again would nest a second acquire
+	// and deadlock a one-slot pool. Reads that bypass the executor (the MCP
+	// observability tools, and the annotation route below) are admitted through
+	// the interactive lane so they cannot oversubscribe the read pool.
+	queries := observability.New(q, q, cfg.RetentionDays)
+	admittedQueries := observability.New(panels.AdmitReader(q), q, cfg.RetentionDays)
 	writer.SetAdmission(repository.CompactionDebt, panels.InteractiveRefusals)
 	go func() {
 		err := writer.Run(ctx)
@@ -317,7 +324,7 @@ func main() {
 	panels.SetCacheTTL(cfg.QueryCacheTTL)
 	api.RegisterQueryRoutes(e, panels)
 	api.RegisterPitotQLRoutes(e, q, panels)
-	api.RegisterAnnotationRoutes(e, annotations.New(q))
+	api.RegisterAnnotationRoutes(e, annotations.New(panels.AdmitReader(q)))
 	api.RegisterTraceRoutes(e, panels.CachedTraces(queries), cfg.RetentionDays)
 	api.RegisterIntelligenceRoutes(e, detector)
 	dashboards := dashboard.New(sqlite.DB, panels)
@@ -391,7 +398,7 @@ func main() {
 	// The model executes the same standard MCP tools exposed to external clients.
 	// The internal connection is in-memory, so the single binary has no HTTP
 	// self-call, shared secret, or sidecar runtime.
-	mcpServer := mcp.NewWithIntelligence(queries, dashboards, panels, detector, version)
+	mcpServer := mcp.NewWithIntelligence(admittedQueries, dashboards, panels, detector, version)
 	if cfg.MCPEnabled {
 		mcpResourceURL := cfg.MCPResourceURL()
 		mcpAuthorization, err := api.NewMCPAuthorization(

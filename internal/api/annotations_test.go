@@ -12,6 +12,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/pitot/internal/annotations"
+	"github.com/labstack/pitot/internal/query"
 )
 
 type annotationFake struct{}
@@ -21,16 +22,20 @@ func (annotationFake) Read(context.Context, annotations.Request) (annotations.Re
 }
 
 func TestAnnotationErrorsWrapped(t *testing.T) {
+	e := echo.New()
+	newCtx := func() *echo.Context {
+		return e.NewContext(httptest.NewRequest(http.MethodPost, "/", nil), httptest.NewRecorder())
+	}
 	original := errors.New("storage failed")
 	for _, cause := range []error{annotations.ErrRequest, context.DeadlineExceeded, original} {
 		wrapped := fmt.Errorf("annotation query: %w", cause)
-		got := annotationError(wrapped)
+		got := annotationError(newCtx(), wrapped)
 		var httpErr *echo.HTTPError
 		if !errors.As(got, &httpErr) || !errors.Is(got, cause) {
 			t.Fatalf("cause lost: %v", got)
 		}
 	}
-	if got := annotationError(fmt.Errorf("read: %w", context.Canceled)); got != nil {
+	if got := annotationError(newCtx(), fmt.Errorf("read: %w", context.Canceled)); got != nil {
 		t.Fatalf("cancellation: %v", got)
 	}
 }
@@ -50,6 +55,7 @@ func TestAnnotationErrorMappings(t *testing.T) {
 		{"request", annotations.ErrRequest, 400, annotations.ErrRequest.Error()},
 		{"deadline", context.DeadlineExceeded, 504, "Annotations took longer than 10 seconds"},
 		{"canceled", context.Canceled, 200, ""},
+		{"busy", query.ErrBusy, 503, query.BusyMessage},
 		{"unknown", errors.New("storage failed"), 500, "annotations unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
