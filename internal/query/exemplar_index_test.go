@@ -22,9 +22,10 @@ func TestIndexedExemplarsRankTracesAndTruncate(t *testing.T) {
 		}
 		spans = append(spans, telemetry.Span{Namespace: "shop", ServiceName: "checkout", TraceID: fmt.Sprintf("trace-%02d", i), SpanID: "root", Name: "root", StartUnixNanos: n, EndUnixNanos: n + int64(i+1)*1000000, DurationMS: float64(i + 1), StatusCode: status})
 	}
-	// Select a long scoped trace, but order its displayed short root last.
+	// Select a trace by its longest scoped span, but order its displayed
+	// short root last.
 	late := fixtureStart.Add(45 * time.Minute).UnixNano()
-	spans = append(spans, telemetry.Span{Namespace: "shop", ServiceName: "checkout", TraceID: "trace-01", SpanID: "late", ParentSpanID: "root", StartUnixNanos: late, EndUnixNanos: late + 1000000, DurationMS: 1})
+	spans = append(spans, telemetry.Span{Namespace: "shop", ServiceName: "checkout", TraceID: "trace-01", SpanID: "late", ParentSpanID: "root", StartUnixNanos: late, EndUnixNanos: late + 100000000, DurationMS: 100})
 	// A much longer trace in another namespace and a different service must not win.
 	for _, s := range []struct{ ns, service string }{{"other", "checkout"}, {"shop", "other"}} {
 		id := s.ns + s.service

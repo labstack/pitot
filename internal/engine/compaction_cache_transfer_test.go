@@ -42,12 +42,12 @@ func TestCompactionDefersWarmCacheTransfer(t *testing.T) {
 			if n != 0 {
 				t.Fatalf("rebuilt %d contributions from already cached inputs", n)
 			}
-			var parts, candidates, markers int
-			if err := d.DB.QueryRow(`SELECT (SELECT count(*) FROM read_trace_parts),(SELECT count(*) FROM read_trace_candidates),(SELECT count(*) FROM read_batches)`).Scan(&parts, &candidates, &markers); err != nil {
+			var exemplars, owners, markers int
+			if err := d.DB.QueryRow(exemplarOwnersQuery).Scan(&exemplars, &owners, &markers); err != nil {
 				t.Fatal(err)
 			}
-			if parts != 24 || candidates != 24 || markers != 3 {
-				t.Fatalf("parts=%d candidates=%d markers=%d", parts, candidates, markers)
+			if exemplars != 24 || owners != 3 || markers != 3 {
+				t.Fatalf("exemplars=%d owners=%d markers=%d", exemplars, owners, markers)
 			}
 		})
 	}
@@ -80,11 +80,15 @@ func TestDeferredCacheTransferFollowsCompactionGenerations(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("rebuilt %d contributions across warm generations", n)
 	}
-	var parts, candidates, markers int
-	if err := d.DB.QueryRow(`SELECT (SELECT count(*) FROM read_trace_parts),(SELECT count(*) FROM read_trace_candidates),(SELECT count(*) FROM read_batches)`).Scan(&parts, &candidates, &markers); err != nil {
+	var exemplars, owners, markers int
+	if err := d.DB.QueryRow(exemplarOwnersQuery).Scan(&exemplars, &owners, &markers); err != nil {
 		t.Fatal(err)
 	}
-	if parts != 64 || candidates != 64 || markers != 1 {
-		t.Fatalf("parts=%d candidates=%d markers=%d", parts, candidates, markers)
+	if exemplars == 0 || owners != 1 || markers != 1 {
+		t.Fatalf("exemplars=%d owners=%d markers=%d", exemplars, owners, markers)
 	}
 }
+
+// Exemplar rows, the batches owning them, and the cached batches: transferred
+// rows belong only to the active output.
+const exemplarOwnersQuery = `SELECT (SELECT count(*) FROM read_trace_exemplars),(SELECT count(DISTINCT batch_id) FROM read_trace_exemplars),(SELECT count(*) FROM read_batches)`

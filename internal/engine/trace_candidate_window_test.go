@@ -3,7 +3,6 @@ package engine
 import (
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,8 +11,8 @@ import (
 	telemetrystore "github.com/labstack/pitot/internal/telemetry/store"
 )
 
-// Compare the complete ranking query with raw rows, not merely the candidate
-// source: boundary candidates and raw tail overlap and must merge exactly.
+// Compare the complete ranking query with raw rows, not merely the exemplar
+// source: cached rows of several batches and the raw tail merge per trace.
 func TestCompletedTraceWindowsMatchRawSpans(t *testing.T) {
 	d, repo := newBatchCacheTest(t)
 	span := func(namespace, service, trace string, start, end int64, failed bool) telemetry.Span {
@@ -40,6 +39,7 @@ func TestCompletedTraceWindowsMatchRawSpans(t *testing.T) {
 	}
 	// The file straddles both boundaries, but includes an entirely contained
 	// trace and an interior part of a trace whose other parts cross the start.
+	// A trace's best in-window span decides its rank, not its extent.
 	commit("boundaries",
 		span("prod", "api", "contained", 0, 5, false),
 		span("prod", "api", "partial", -15, -10, true),
@@ -66,10 +66,7 @@ func TestCompletedTraceWindowsMatchRawSpans(t *testing.T) {
 				for _, limit := range []int{1, 3, 20} {
 					w := queryrows.Window{Start: time.Unix(0, bounds[0]).UTC(), End: time.Unix(0, bounds[1]).UTC(), Namespace: scope[0], Service: scope[1], Kind: queryrows.TraceCandidateRead}
 					args := []any{w.Start, w.End, scope[0], scope[0], scope[1], scope[1], limit}
-					// Expose the kernel's aggregate bounds as well as its public
-					// identity/error projection, without replacing any merge logic.
-					query := strings.Replace(queryrows.CompletedTraceQuery, "SELECT namespace,trace_id,has_error FROM candidates", "SELECT namespace,trace_id,has_error,min_start,max_end FROM candidates", 1)
-					got := completedTraceWindowRows(t, d, w, query, args)
+					got := completedTraceWindowRows(t, d, w, queryrows.CompletedTraceQuery, args)
 					w.Kind = queryrows.RawRead
 					want := completedTraceWindowRows(t, d, w, rawCompletedTraceWindowQuery, args)
 					if !reflect.DeepEqual(got, want) {
@@ -110,19 +107,19 @@ func TestCompletedTraceWindowsMatchRawSpans(t *testing.T) {
 	check("retired marker cleanup")
 }
 
-const rawCompletedTraceWindowQuery = `SELECT namespace,trace_id,
- max(CASE WHEN status='STATUS_CODE_ERROR' THEN 1 ELSE 0 END) AS has_error,
- min(start_unix_nano),max(end_unix_nano)
+// The best span is the longest error span when there is one, otherwise the
+// longest span: an independent formulation of the production ranking.
+const rawCompletedTraceWindowQuery = `SELECT namespace,trace_id,max(has_error) AS has_error FROM (
+ SELECT namespace,trace_id,CASE WHEN status='STATUS_CODE_ERROR' THEN 1 ELSE 0 END AS has_error,end_unix_nano-start_unix_nano AS duration
  FROM spans WHERE start_time >= $1::TIMESTAMP_NS::TIMESTAMPTZ_NS
  AND start_time < $2::TIMESTAMP_NS::TIMESTAMPTZ_NS
- AND ($3='' OR namespace=$4) AND ($5='' OR service=$6) AND trace_id<>''
+ AND ($3='' OR namespace=$4) AND ($5='' OR service=$6) AND trace_id<>'')
  GROUP BY namespace,trace_id
- ORDER BY has_error DESC,max(end_unix_nano)-min(start_unix_nano) DESC,trace_id,namespace LIMIT $7`
+ ORDER BY max(has_error) DESC,coalesce(max(duration) FILTER (WHERE has_error=1),max(duration)) DESC,trace_id,namespace LIMIT $7`
 
 type completedTraceWindowRow struct {
 	namespace, trace string
 	hasError         int
-	minStart, maxEnd int64
 }
 
 func completedTraceWindowRows(t testing.TB, d *Duck, w queryrows.Window, sql string, args []any) []completedTraceWindowRow {
@@ -135,7 +132,7 @@ func completedTraceWindowRows(t testing.TB, d *Duck, w queryrows.Window, sql str
 	var out []completedTraceWindowRow
 	for rows.Next() {
 		var row completedTraceWindowRow
-		if err := rows.Scan(&row.namespace, &row.trace, &row.hasError, &row.minStart, &row.maxEnd); err != nil {
+		if err := rows.Scan(&row.namespace, &row.trace, &row.hasError); err != nil {
 			t.Fatal(err)
 		}
 		out = append(out, row)

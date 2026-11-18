@@ -103,7 +103,7 @@ func TestDefaultResourcePanelsAcrossCacheStates(t *testing.T) {
 	for _, state := range []string{"partial", "cold", "full"} {
 		t.Run(state, func(t *testing.T) {
 			if state == "cold" {
-				if _, err := d.DB.Exec(`DELETE FROM read_batches; DELETE FROM read_resource_inventory; DELETE FROM read_resource_seconds; DELETE FROM read_metric_names; DELETE FROM read_trace_parts; DELETE FROM read_trace_candidates`); err != nil {
+				if _, err := d.DB.Exec(`DELETE FROM read_batches; DELETE FROM read_resource_inventory; DELETE FROM read_resource_seconds; DELETE FROM read_metric_names; DELETE FROM read_trace_exemplars`); err != nil {
 					t.Fatal(err)
 				}
 				if err := engine.CreateCacheTables(d.DB); err != nil {

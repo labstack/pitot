@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -180,7 +181,7 @@ func TestCompletedBatchCachesIncludeLatePublicationAndPartialMinutes(t *testing.
 	w := queryrows.Window{Start: at.Add(20 * time.Second), End: at.Add(140 * time.Second), Namespace: "prod", Service: "api"}
 	w.Kind = queryrows.TraceCandidateRead
 	var count int
-	q := `SELECT count(DISTINCT trace_id) FROM (SELECT trace_id FROM trace_candidates UNION ALL SELECT trace_id FROM trace_tail)`
+	q := `SELECT count(DISTINCT trace_id) FROM trace_exemplars`
 	if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), w), []any{&count}, q); err != nil || count != 5 {
 		t.Fatalf("partial/late trace candidates=%d: %v", count, err)
 	}
@@ -193,7 +194,7 @@ func TestCompletedBatchCachesIncludeLatePublicationAndPartialMinutes(t *testing.
 	if err := d.DB.QueryRow(`SELECT count(*) FROM read_batches`).Scan(&markers); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_parts`).Scan(&parts); err != nil {
+	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars`).Scan(&parts); err != nil {
 		t.Fatal(err)
 	}
 	if markers != 2 || parts != 8 {
@@ -239,11 +240,12 @@ func TestBatchCachesStayExactThroughCompactionAndRetention(t *testing.T) {
 		w.Kind = queryrows.TraceCandidateRead
 		w.Namespace = "prod"
 		w.Service = "api"
-		if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), w), []any{&count}, `SELECT (SELECT count(*) FROM trace_candidates)+(SELECT count(*) FROM trace_tail)`); err != nil {
+		if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), w), []any{&count}, `SELECT count(*) FROM trace_exemplars`); err != nil {
 			t.Fatal(err)
 		}
 		// A replacement derived from complete inputs is immediately cached even
-		// while the retired input markers remain. It has one candidate and no tail.
+		// while the retired input markers remain: the covered minute holds the
+		// trace's one best span and nothing reads the inputs or a raw tail.
 		if count != 1 {
 			t.Fatalf("candidate coverage=%d", count)
 		}
@@ -265,13 +267,13 @@ func TestBatchCachesStayExactThroughCompactionAndRetention(t *testing.T) {
 	}
 	w := queryrows.Window{Start: at.Add(-time.Minute), End: at.Add(time.Minute), Kind: queryrows.TraceCandidateRead, Namespace: "prod", Service: "api"}
 	var count int
-	if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), w), []any{&count}, `SELECT (SELECT count(*) FROM trace_candidates)+(SELECT count(*) FROM trace_tail)`); err != nil || count != 0 {
+	if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), w), []any{&count}, `SELECT count(*) FROM trace_exemplars`); err != nil || count != 0 {
 		t.Fatalf("retired trace visible: %d: %v", count, err)
 	}
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_parts`).Scan(&count); err != nil || count != 0 {
+	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("retired index retained: %d %v", count, err)
 	}
 }
@@ -285,7 +287,7 @@ func TestReadCacheCancellationLeavesNoMarkerOrPartialContributions(t *testing.T)
 	if _, err := d.RefreshReadCaches(ctx); err == nil {
 		t.Fatal("cancelled backfill succeeded")
 	}
-	for _, table := range []string{"read_batches", "read_resource_inventory", "read_trace_parts", "read_trace_candidates"} {
+	for _, table := range []string{"read_batches", "read_resource_inventory", "read_trace_exemplars"} {
 		var count int
 		if err := d.DB.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("%s partial rows=%d: %v", table, count, err)
@@ -302,13 +304,13 @@ func TestFailedBatchCacheTransactionPublishesNoContributions(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Fail after the span writes, before acknowledgement.
-	if _, err := d.DB.Exec(`DROP TABLE read_trace_candidates`); err != nil {
+	if _, err := d.DB.Exec(`DROP TABLE read_trace_exemplars`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.RefreshReadCaches(t.Context()); err == nil {
 		t.Fatal("broken cache schema accepted")
 	}
-	for _, table := range []string{"read_batches", "read_resource_inventory", "read_trace_parts"} {
+	for _, table := range []string{"read_batches", "read_resource_inventory", "read_resource_seconds"} {
 		var count int
 		if err := d.DB.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("%s partial rows=%d: %v", table, count, err)
@@ -405,7 +407,7 @@ func TestReadCacheSemanticVersionRebuildsAllContributions(t *testing.T) {
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, stmt := range []string{`UPDATE read_trace_candidates SET min_start=0`, `UPDATE read_resource_inventory SET first_seen=make_timestamp_ns(0)::TIMESTAMPTZ_NS`, `UPDATE read_cache_version SET version=5`, `INSERT INTO read_edge_buckets VALUES ('ns',now(),10)`, `INSERT INTO rollup_state VALUES ('edge_rollup_v2_substart',1,now()),('edge_rollup_v2_subwindow_end',2,now())`, `CREATE TABLE read_endpoints (value INTEGER)`, `CREATE TABLE read_logs (value INTEGER)`, `CREATE TABLE read_obsolete (value INTEGER)`,
+	for _, stmt := range []string{`UPDATE read_trace_exemplars SET start_unix_nano=0`, `UPDATE read_resource_inventory SET first_seen=make_timestamp_ns(0)::TIMESTAMPTZ_NS`, `UPDATE read_cache_version SET version=5`, `INSERT INTO read_edge_buckets VALUES ('ns',now(),10)`, `INSERT INTO rollup_state VALUES ('edge_rollup_v2_substart',1,now()),('edge_rollup_v2_subwindow_end',2,now())`, `CREATE TABLE read_endpoints (value INTEGER)`, `CREATE TABLE read_logs (value INTEGER)`, `CREATE TABLE read_obsolete (value INTEGER)`,
 		`INSERT INTO service_rollup (namespace,bucket,service,spans) VALUES ('ns',now(),'svc',1)`, `INSERT INTO edge_rollup (namespace,bucket,caller,callee,calls) VALUES ('ns',now(),'a','b',1)`,
 		`INSERT INTO version_rollup VALUES ('ns','svc','v1',now(),now())`, `INSERT INTO version_rollup_batches VALUES ('semantic',1)`,
 		`INSERT INTO anomaly_log VALUES ('ns','svc','latency',now(),now(),'slow','bad')`, `INSERT INTO rollup_state VALUES ('service_rollup_v3',1,now())`} {
@@ -416,7 +418,7 @@ func TestReadCacheSemanticVersionRebuildsAllContributions(t *testing.T) {
 	if err := CreateCacheTables(d.DB); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"read_batches", "read_resource_inventory", "read_trace_parts", "read_trace_candidates", "read_edge_buckets",
+	for _, table := range []string{"read_batches", "read_resource_inventory", "read_trace_exemplars", "read_edge_buckets",
 		"service_rollup", "edge_rollup", "rollup_state", "version_rollup", "version_rollup_batches"} {
 		var count int
 		if err := d.DB.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
@@ -443,7 +445,7 @@ func TestReadCacheSemanticVersionRebuildsAllContributions(t *testing.T) {
 		t.Fatal(err)
 	}
 	var minStart int64
-	if err := d.DB.QueryRow(`SELECT min_start FROM read_trace_candidates`).Scan(&minStart); err != nil || minStart != at.UnixNano() {
+	if err := d.DB.QueryRow(`SELECT start_unix_nano FROM read_trace_exemplars`).Scan(&minStart); err != nil || minStart != at.UnixNano() {
 		t.Fatalf("rebuilt bound=%d: %v", minStart, err)
 	}
 	var version int
@@ -530,7 +532,7 @@ func TestBatchFilenameIdentityWithRelativeDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_parts WHERE batch_id IN (SELECT batch_id FROM read_batches)`).Scan(&count); err != nil || count != readCacheBatchLimit {
+	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars WHERE batch_id IN (SELECT batch_id FROM read_batches)`).Scan(&count); err != nil || count != readCacheBatchLimit {
 		t.Fatalf("relative cache batch identity=%d: %v", count, err)
 	}
 	active := repo.Parquet.BatchMetadata()
@@ -602,7 +604,9 @@ func TestPreparedReplacementDoesNotHoldCacheWriteGate(t *testing.T) {
 	}
 }
 
-func TestRetiredTraceRepairsOnlyItsActiveScopeAndBounds(t *testing.T) {
+// Retention removes a retired batch's spans from a trace's score: the shared
+// trace loses its retired error span and ranks below the remaining winner.
+func TestRetentionRemovesRetiredSpansFromTraceRanking(t *testing.T) {
 	d, repo := newBatchCacheTest(t)
 	at := time.Now().UTC().Truncate(time.Hour)
 	old := at.Add(-2 * time.Hour).UnixNano()
@@ -626,9 +630,10 @@ func TestRetiredTraceRepairsOnlyItsActiveScopeAndBounds(t *testing.T) {
 		t.Helper()
 		for _, ns := range []string{"", "prod"} {
 			w := queryrows.Window{Start: at.Add(-3 * time.Hour), End: at.Add(time.Minute), Kind: queryrows.TraceCandidateRead, Namespace: ns}
-			var id string
-			if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), w), []any{&id}, `SELECT trace_id FROM trace_candidates ORDER BY has_error DESC,max_end-min_start DESC,trace_id LIMIT 1`); err != nil || id != "winner" {
-				t.Fatalf("namespace %q winner=%q: %v", ns, id, err)
+			got := completedTraces(t, d, w, traceExemplarDepth)
+			want := []oracleRow{{"prod", "winner", 0}, {"prod", "shared", 0}}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("namespace %q ranking=%v", ns, got)
 			}
 		}
 	}
@@ -637,10 +642,9 @@ func TestRetiredTraceRepairsOnlyItsActiveScopeAndBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	check()
-	var namespace, service string
-	var hasError int
-	if err := d.DB.QueryRow(`SELECT namespace,service,has_error FROM read_trace_candidates WHERE trace_id='shared'`).Scan(&namespace, &service, &hasError); err != nil || namespace != "prod" || service != "api" || hasError != 0 {
-		t.Fatalf("remaining scope=%q/%q error=%d: %v", namespace, service, hasError, err)
+	var retired int
+	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars WHERE namespace='gone'`).Scan(&retired); err != nil || retired != 0 {
+		t.Fatalf("retired exemplars=%d: %v", retired, err)
 	}
 }
 
@@ -669,7 +673,7 @@ func TestTraceCacheFollowsMultipleCompactionLevels(t *testing.T) {
 	w := queryrows.Window{Start: at.Add(-time.Minute), End: at.Add(2 * time.Minute), Kind: queryrows.TraceCandidateRead}
 	assertInventoryOracle(t, d, w, 1)
 	var count int
-	if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), w), []any{&count}, `SELECT count(*) FROM trace_candidates`); err != nil || count != 1 {
+	if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), w), []any{&count}, `SELECT count(DISTINCT trace_id) FROM trace_exemplars`); err != nil || count != 1 {
 		t.Fatalf("candidate=%d: %v", count, err)
 	}
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
@@ -678,8 +682,8 @@ func TestTraceCacheFollowsMultipleCompactionLevels(t *testing.T) {
 	if err := d.DB.QueryRow(`SELECT count(*) FROM read_batches`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("retired markers=%d: %v", count, err)
 	}
-	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_candidates`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("trace index=%d: %v", count, err)
+	if err := d.DB.QueryRow(`SELECT count(DISTINCT batch_id) FROM read_trace_exemplars`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("exemplar owners=%d: %v", count, err)
 	}
 }
 
@@ -739,7 +743,7 @@ func TestReadCacheRowBudgetAndOversizedFileProgress(t *testing.T) {
 		t.Fatalf("oversized file made no progress: %v %v", markers, err)
 	}
 	var count int
-	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_parts WHERE batch_id='oversized'`).Scan(&count); err != nil || count != len(old) {
+	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars WHERE batch_id='oversized'`).Scan(&count); err != nil || count == 0 {
 		t.Fatalf("oversized count=%d: %v", count, err)
 	}
 }
@@ -775,7 +779,7 @@ func TestReadCacheBudgetsAllSignalsAndReportsInventoryWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	markers, err = batchMarkers(t.Context(), d.DB)
-	if err != nil || !markers["log-heavy-trace"] || markers["older-trace"] || written != 6 {
+	if err != nil || !markers["log-heavy-trace"] || markers["older-trace"] || written != 5 {
 		t.Fatalf("oversized mixed batch: %v written=%d err=%v", markers, written, err)
 	}
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
@@ -787,7 +791,9 @@ func TestReadCacheBudgetsAllSignalsAndReportsInventoryWork(t *testing.T) {
 	}
 }
 
-func TestRetirementRepairsOnlyMatchingNamespaceIdentity(t *testing.T) {
+// The same trace_id in two namespaces ranks as two traces, and retiring one
+// namespace's error span changes only that identity.
+func TestRetentionRanksTraceIdentityPerNamespace(t *testing.T) {
 	d, repo := newBatchCacheTest(t)
 	at := time.Now().UTC().Truncate(time.Hour)
 	old, now := at.Add(-2*time.Hour).UnixNano(), at.UnixNano()
@@ -809,26 +815,8 @@ func TestRetirementRepairsOnlyMatchingNamespaceIdentity(t *testing.T) {
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []struct {
-		namespace, service string
-		start, end         int64
-		hasError           int
-	}{
-		{"a", "api", now, now + 10, 0},
-		{"b", "worker", now + 20, now + 30, 1},
-	} {
-		var service string
-		var start, maxStart, end int64
-		var hasError int
-		if err := d.DB.QueryRow(`SELECT service,min_start,max_start,max_end,has_error FROM read_trace_candidates WHERE namespace=? AND trace_id='shared'`, want.namespace).Scan(&service, &start, &maxStart, &end, &hasError); err != nil {
-			t.Fatal(err)
-		}
-		if service != want.service || start != want.start || maxStart != want.start || end != want.end || hasError != want.hasError {
-			t.Fatalf("namespace=%s service=%s bounds=%d/%d/%d error=%d", want.namespace, service, start, maxStart, end, hasError)
-		}
-	}
-	var count int
-	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_candidates WHERE trace_id='shared'`).Scan(&count); err != nil || count != 2 {
-		t.Fatalf("candidates=%d: %v", count, err)
+	w := queryrows.Window{Start: at.Add(-3 * time.Hour), End: at.Add(time.Minute)}
+	if got, want := completedTraces(t, d, w, traceExemplarDepth), []oracleRow{{"b", "shared", 1}, {"a", "shared", 0}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ranking=%v want %v", got, want)
 	}
 }

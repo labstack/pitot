@@ -83,7 +83,7 @@ func TestCompactionPublishesDuringBackgroundReads(t *testing.T) {
 					t.Fatalf("rebuilt output markers=%d, want 3: %v", markers, err)
 				}
 				var parts int
-				if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_parts`).Scan(&parts); err != nil || parts != 24 {
+				if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars`).Scan(&parts); err != nil || parts != 24 {
 					t.Fatalf("rebuilt trace contributions=%d, want 24: %v", parts, err)
 				}
 				d.unpinParquet(pin)

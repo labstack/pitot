@@ -63,7 +63,7 @@ func TestStartupMaintenanceProgressesBeforeInitialRollup(t *testing.T) {
 			var traces int
 			window.Kind = queryrows.TraceCandidateRead
 			window.Namespace, window.Service = "startup", "api"
-			if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), window), []any{&traces}, `SELECT count(DISTINCT trace_id) FROM (SELECT trace_id FROM trace_candidates UNION ALL SELECT trace_id FROM trace_tail)`); err != nil || traces != 9 {
+			if err := d.QueryRowScan(queryrows.WithWindow(t.Context(), window), []any{&traces}, `SELECT count(DISTINCT trace_id) FROM trace_exemplars`); err != nil || traces != 9 {
 				t.Fatalf("candidate traces=%d want9: %v", traces, err)
 			}
 			assertInventoryOracle(t, d, window, 3)

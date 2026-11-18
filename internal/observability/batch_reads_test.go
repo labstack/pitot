@@ -29,14 +29,16 @@ func newCompletedReadTest(t *testing.T) (*engine.Duck, *telemetrystore.Repositor
 	return d, repo, New(d, d, 30)
 }
 
-// rawTraceQuery ranks a window's traces straight from its spans: the oracle
-// the completed-batch candidates must match.
+// rawTraceQuery ranks a window's traces straight from its spans by their
+// best span, the longest error span or else the longest span: the oracle the
+// completed-batch exemplars must match.
 const rawTraceQuery = `SELECT trace_id FROM spans
 WHERE start_time >= ?::TIMESTAMP_NS::TIMESTAMPTZ_NS AND start_time < ?::TIMESTAMP_NS::TIMESTAMPTZ_NS
 AND (? = '' OR namespace = ?) AND trace_id <> '' AND (? = '' OR service = ?)
 GROUP BY namespace,trace_id
 ORDER BY MAX(CASE WHEN status = 'STATUS_CODE_ERROR' THEN 1 ELSE 0 END) DESC,
- MAX(end_unix_nano) - MIN(start_unix_nano) DESC, trace_id ASC, namespace ASC
+ coalesce(MAX(end_unix_nano - start_unix_nano) FILTER (WHERE status = 'STATUS_CODE_ERROR'), MAX(end_unix_nano - start_unix_nano)) DESC,
+ trace_id ASC, namespace ASC
 LIMIT 1`
 
 func rawTraceID(t testing.TB, d *engine.Duck, scope Scope, service string) (string, error) {
@@ -133,9 +135,8 @@ func TestCompletedTraceReadsMatchColdAndLateData(t *testing.T) {
 	}
 }
 
-// When every cached file overlapping the window lies inside it, a trace whose
-// other cached spans sit in a file outside the window is still a candidate:
-// its in-window spans decide the ranking, as they do for the raw query.
+// A trace whose other cached spans sit in a file outside the window is still
+// ranked: its in-window spans decide the ranking, as they do for the raw query.
 func TestCompletedTraceKeepsTraceWithSpansOutsideWindow(t *testing.T) {
 	d, repo, svc := newCompletedReadTest(t)
 	t0 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -169,8 +170,8 @@ func TestCompletedTraceKeepsTraceWithSpansOutsideWindow(t *testing.T) {
 	}
 }
 
-// Time-local batches put most window edges between files, so cached candidates
-// must combine index rows with the in-window parts of partially covered traces.
+// Time-local batches put most window edges between files and minutes, so
+// cached exemplars must combine partial minutes of several batches.
 func TestCompletedTraceMatchesRawAcrossTimeLocalBatches(t *testing.T) {
 	d, repo, svc := newCompletedReadTest(t)
 	rng := rand.New(rand.NewPCG(11, 104729))
