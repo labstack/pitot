@@ -362,7 +362,7 @@ func timeLiteral(t time.Time) string {
 func windowPredicate(column string, w queryrows.Window) string {
 	return column + ">=" + timeLiteral(w.Start) + " AND " + column + "<" + timeLiteral(w.End)
 }
-func (d *Duck) aggregateSources(ctx context.Context, db snapshotSQL, batches []telemetry.BatchMetadata, w queryrows.Window, inventory bool, sources map[string]string) error {
+func (d *Duck) aggregateSources(ctx context.Context, db snapshotSQL, batches []telemetry.BatchMetadata, w queryrows.Window, inventory, traces bool, sources map[string]string) error {
 	markers, err := batchMarkers(ctx, db)
 	if err != nil {
 		return err
@@ -390,10 +390,10 @@ func (d *Duck) aggregateSources(ctx context.Context, db snapshotSQL, batches []t
 		queryrows.RecordCoverage(ctx, fresh)
 		sources["resource_inventory"] = d.resourceInventorySource(batches, markers, window)
 	}
-	if w.Kind == queryrows.RawRead {
-		return nil
+	// Only statements that rank traces pay for the per-batch exemplar source.
+	if traces {
+		sources["trace_exemplars"] = d.traceExemplarSource(batches, markers, w)
 	}
-	sources["trace_exemplars"] = d.traceExemplarSource(batches, markers, w)
 	return nil
 }
 

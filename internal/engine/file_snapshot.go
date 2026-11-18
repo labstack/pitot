@@ -209,8 +209,10 @@ func (d *Duck) bindSnapshot(ctx context.Context, db snapshotSQL, query string, w
 		sources[signal] = cleanSource(signal, physical)
 	}
 	_, inventory := compiled.names["resource_inventory"]
-	if w.Kind != queryrows.RawRead || inventory {
-		if err := d.aggregateSources(ctx, db, batches, w, inventory, sources); err != nil {
+	_, traces := compiled.names["trace_exemplars"]
+	traces = traces && w.Kind != queryrows.RawRead
+	if traces || inventory {
+		if err := d.aggregateSources(ctx, db, batches, w, inventory, traces, sources); err != nil {
 			return "", err
 		}
 	}

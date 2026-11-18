@@ -605,12 +605,13 @@ func TestPreparedReplacementDoesNotHoldCacheWriteGate(t *testing.T) {
 }
 
 // Retention removes a retired batch's spans from a trace's score: the shared
-// trace loses its retired error span and ranks below the remaining winner.
+// trace loses its retired error span, in the same scope as its kept span, and
+// ranks below the remaining winner.
 func TestRetentionRemovesRetiredSpansFromTraceRanking(t *testing.T) {
 	d, repo := newBatchCacheTest(t)
 	at := time.Now().UTC().Truncate(time.Hour)
 	old := at.Add(-2 * time.Hour).UnixNano()
-	if err := commitRestoredFixture(repo, t.Context(), telemetrystore.Batch{ID: "retire-scope", Spans: []telemetry.Span{{Namespace: "gone", ServiceName: "retired", TraceID: "shared", StartUnixNanos: old, EndUnixNanos: old + 1, StatusCode: "STATUS_CODE_ERROR", IngestedAt: old}}}); err != nil {
+	if err := commitRestoredFixture(repo, t.Context(), telemetrystore.Batch{ID: "retire-scope", Spans: []telemetry.Span{{Namespace: "prod", ServiceName: "api", TraceID: "shared", StartUnixNanos: old, EndUnixNanos: old + 1, StatusCode: "STATUS_CODE_ERROR", IngestedAt: old}}}); err != nil {
 		t.Fatal(err)
 	}
 	now := at.UnixNano()
@@ -623,27 +624,27 @@ func TestRetentionRemovesRetiredSpansFromTraceRanking(t *testing.T) {
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if count, err := repo.PruneParquet(t.Context(), d, at.Add(-time.Hour).UnixNano(), 8); err != nil || count != 1 {
-		t.Fatalf("prune=%d: %v", count, err)
-	}
-	check := func() {
+	check := func(want []oracleRow) {
 		t.Helper()
-		for _, ns := range []string{"", "prod"} {
-			w := queryrows.Window{Start: at.Add(-3 * time.Hour), End: at.Add(time.Minute), Kind: queryrows.TraceCandidateRead, Namespace: ns}
-			got := completedTraces(t, d, w, traceExemplarDepth)
-			want := []oracleRow{{"prod", "winner", 0}, {"prod", "shared", 0}}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("namespace %q ranking=%v", ns, got)
+		for _, scope := range [][2]string{{"", ""}, {"prod", ""}, {"prod", "api"}} {
+			w := queryrows.Window{Start: at.Add(-3 * time.Hour), End: at.Add(time.Minute), Kind: queryrows.TraceCandidateRead, Namespace: scope[0], Service: scope[1]}
+			if got := completedTraces(t, d, w, traceExemplarDepth); !reflect.DeepEqual(got, want) {
+				t.Fatalf("scope %v ranking=%v want %v", scope, got, want)
 			}
 		}
 	}
-	check()
+	check([]oracleRow{{"prod", "shared", 1}, {"prod", "winner", 0}})
+	if count, err := repo.PruneParquet(t.Context(), d, at.Add(-time.Hour).UnixNano(), 8); err != nil || count != 1 {
+		t.Fatalf("prune=%d: %v", count, err)
+	}
+	retained := []oracleRow{{"prod", "winner", 0}, {"prod", "shared", 0}}
+	check(retained)
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	check()
+	check(retained)
 	var retired int
-	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars WHERE namespace='gone'`).Scan(&retired); err != nil || retired != 0 {
+	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars WHERE batch_id='retire-scope'`).Scan(&retired); err != nil || retired != 0 {
 		t.Fatalf("retired exemplars=%d: %v", retired, err)
 	}
 }

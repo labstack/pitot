@@ -418,3 +418,62 @@ func TestCompletedTraceQueryMatchesBruteForce(t *testing.T) {
 		t.Fatalf("orphaned exemplar rows=%d error=%v", stale, err)
 	}
 }
+
+// Minutes before the epoch use floor division in both Go and SQL: rows land
+// in the minute their start belongs to, and windows across negative minute
+// boundaries rank exactly.
+func TestCompletedTraceQueryMatchesBruteForceBeforeEpoch(t *testing.T) {
+	d, repo := newBatchCacheTest(t)
+	r := rand.New(rand.NewSource(5))
+	for b := range 3 {
+		batch := telemetrystore.Batch{ID: fmt.Sprintf("pre%d", b)}
+		for i := range 900 {
+			// Starts from -180s to +60s on a 5s grid, never exactly zero.
+			start := int64(r.Intn(48)-36)*5*int64(time.Second) + int64(r.Intn(2))
+			if start == 0 {
+				start = -1
+			}
+			status := "STATUS_CODE_OK"
+			if r.Intn(30) == 0 {
+				status = "STATUS_CODE_ERROR"
+			}
+			dur := int64(1+r.Intn(9)) * int64(time.Millisecond)
+			batch.Spans = append(batch.Spans, telemetry.Span{Namespace: "prod", ServiceName: "api", TraceID: fmt.Sprintf("trace-%03d", r.Intn(300)),
+				SpanID: fmt.Sprintf("%d-%d", b, i), StartUnixNanos: start, EndUnixNanos: start + dur, DurationMS: float64(dur) / 1e6, StatusCode: status, IngestedAt: int64(b + 1)})
+		}
+		if err := commitRestoredFixture(repo, t.Context(), batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for {
+		rows, err := d.RefreshReadCaches(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rows == 0 {
+			break
+		}
+	}
+	var misplaced int
+	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars WHERE minute>start_unix_nano OR minute+60000000000<=start_unix_nano OR minute%60000000000<>0`).Scan(&misplaced); err != nil || misplaced != 0 {
+		t.Fatalf("misplaced minutes=%d: %v", misplaced, err)
+	}
+	for _, s := range []int64{-180, -125, -120, -61, -60, -35, -1} {
+		if got := floorMinute(s * int64(time.Second)); got > s*int64(time.Second) || got%minuteNanos != 0 || s*int64(time.Second)-got >= minuteNanos {
+			t.Fatalf("floorMinute(%ds)=%d", s, got)
+		}
+	}
+	raw := rawOracleSpans(t, d)
+	for _, bounds := range [][2]int64{{-180, 60}, {-125, -5}, {-120, -60}, {-95, -65}, {-65, -55}, {-62, 3}, {-1, 30}, {-170, -61}} {
+		for _, limit := range []int{1, traceExemplarDepth} {
+			for _, service := range []string{"", "api"} {
+				w := queryrows.Window{Start: time.Unix(0, bounds[0]*int64(time.Second)).UTC(), End: time.Unix(0, bounds[1]*int64(time.Second)).UTC(), Namespace: "prod", Service: service}
+				got := completedTraces(t, d, w, limit)
+				want := bruteCompletedTraces(raw, w.Start.UnixNano(), w.End.UnixNano(), "prod", service, limit)
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("window=%v limit=%d service=%q:\n got %v\nwant %v", bounds, limit, service, got, want)
+				}
+			}
+		}
+	}
+}
