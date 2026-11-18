@@ -89,11 +89,12 @@
   remain immediately visible. Compaction and retention must invalidate retired
   contributions without double counting or losing late publications.
 - Version disposable read-cache schema and semantics together; mismatches rebuild
-  all private read tables. Cache per-batch trace bounds,
-  and one incremental candidate per trace, never individual event copies or
-  four globally rewritten scope indexes. Mixed trace scopes use batch parts. Exact
-  scoped boundaries read footer-pruned Parquet, and compaction derives complete
-  output contributions from cached inputs. Body search matches redacted text.
+  all private read tables. Notable traces rank by their best in-scope span
+  (error first, then longest). Cache bounded per-(batch, scope, minute) span
+  exemplar lists with no cross-batch trace state, never individual event copies
+  or globally rewritten scope indexes; uncached batches union in ranked the same
+  way. Windows within one minute read footer-pruned Parquet, and compaction
+  derives output lists from cached inputs. Body search matches redacted text.
   Analytical service/edge watermark lag is separate. Completed-batch writes
   have their own gate and write-pool slot; analytical writes use disjoint tables.
   Maintenance must hold both gates for checkpointing.

@@ -120,7 +120,7 @@ func TestSnapshotPreparationRetentionScalingBenchmark(t *testing.T) {
 			args  []any
 		}{
 			{"raw", `SELECT count(DISTINCT trace_id) FROM spans WHERE start_time>=?::TIMESTAMP_NS::TIMESTAMPTZ_NS AND start_time<?::TIMESTAMP_NS::TIMESTAMPTZ_NS AND namespace='prod' AND service='api'`, queryrows.RawRead, []any{window.Start, window.End}},
-			{"trace_candidates", `SELECT count(*) FROM (SELECT namespace,trace_id FROM trace_candidates UNION SELECT namespace,trace_id FROM trace_tail)`, queryrows.TraceCandidateRead, nil},
+			{"trace_exemplars", `SELECT count(*) FROM (SELECT DISTINCT namespace,trace_id FROM trace_exemplars)`, queryrows.TraceCandidateRead, nil},
 		} {
 			w := window
 			w.Kind = mode.kind

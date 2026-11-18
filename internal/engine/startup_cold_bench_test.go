@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sync"
 	"syscall"
@@ -160,23 +161,26 @@ func TestColdStartupCompactsOversizedCacheOutput(t *testing.T) {
 	traceWindow.Kind = queryrows.TraceCandidateRead
 	traceWindow.Namespace = "cold_startup"
 	traceWindow.Service = "api"
-	var candidates, tail int
-	if err := d.QueryRowScan(queryrows.WithWindow(ctx, traceWindow), []any{&candidates, &tail}, `SELECT (SELECT count(DISTINCT trace_id) FROM (SELECT trace_id FROM trace_candidates UNION ALL SELECT trace_id FROM trace_tail)),(SELECT count(*) FROM trace_tail)`); err != nil || candidates != want || tail != 0 {
-		t.Fatalf("candidate traces=%d want=%d uncached_tail=%d error=%v", candidates, want, tail, err)
+	args := []any{traceWindow.Start, traceWindow.End, traceWindow.Namespace, traceWindow.Namespace, traceWindow.Service, traceWindow.Service, queryrows.CompletedTraceLimit}
+	ranked := completedTraceWindowRows(t, d, traceWindow, queryrows.CompletedTraceQuery, args)
+	rawWindow := traceWindow
+	rawWindow.Kind = queryrows.RawRead
+	if raw := completedTraceWindowRows(t, d, rawWindow, rawCompletedTraceWindowQuery, args); len(ranked) == 0 || !reflect.DeepEqual(ranked, raw) {
+		t.Fatalf("ranked traces=%v raw=%v", ranked, raw)
 	}
 	assertInventoryOracle(t, d, window, 2)
 	var integerResources, stringResources, readyResources int
 	if err := d.QueryRowScan(inventoryContext(ctx, window), []any{&integerResources, &stringResources, &readyResources}, `SELECT count(*) FILTER (WHERE variant_type(resource,'generation')='INT64'),count(*) FILTER (WHERE variant_type(resource,'generation')='VARCHAR'),count(*) FILTER (WHERE resource['ready']::BOOLEAN) FROM resource_inventory`); err != nil || integerResources != 1 || stringResources != 1 || readyResources != 2 {
 		t.Fatalf("typed resources integer=%d string=%d ready=%d error=%v", integerResources, stringResources, readyResources, err)
 	}
-	for _, table := range []string{"read_batches", "read_trace_parts", "read_resource_inventory", "read_resource_seconds", "read_metric_names"} {
+	for _, table := range []string{"read_batches", "read_trace_exemplars", "read_resource_inventory", "read_resource_seconds", "read_metric_names"} {
 		var retired int
 		if err := d.DB.QueryRowContext(ctx, "SELECT count(*) FROM "+table+" WHERE batch_id IN ("+idsSQL(inputIDs)+")").Scan(&retired); err != nil || retired != 0 {
 			t.Fatalf("retired contributions table=%s rows=%d error=%v", table, retired, err)
 		}
 	}
 	var candidateRows, rolledSpans int
-	if err := d.DB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM read_trace_candidates),(SELECT coalesce(sum(spans),0) FROM span_rollup)`).Scan(&candidateRows, &rolledSpans); err != nil || candidateRows != want || rolledSpans != want {
+	if err := d.DB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM read_trace_exemplars),(SELECT coalesce(sum(spans),0) FROM span_rollup)`).Scan(&candidateRows, &rolledSpans); err != nil || candidateRows == 0 || rolledSpans != want {
 		t.Fatalf("cache candidates=%d rollup spans=%d want=%d error=%v", candidateRows, rolledSpans, want, err)
 	}
 	stop()

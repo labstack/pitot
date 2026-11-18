@@ -211,7 +211,7 @@ func TestPanelRollupKeysUpgradePreviousCacheOnReopen(t *testing.T) {
 		}
 	}
 	for _, statement := range []string{
-		`UPDATE read_cache_version SET version=18`,
+		`UPDATE read_cache_version SET version=19`,
 		`UPDATE rollup_schema_version SET version=4`,
 		`INSERT INTO anomaly_log VALUES ('upgrade','svc','latency',now(),now(),'witness','preserve me')`,
 		`INSERT INTO read_edge_buckets VALUES ('upgrade',now(),10)`,
@@ -244,13 +244,13 @@ func TestPanelRollupKeysUpgradePreviousCacheOnReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for table, want := range map[string]int{"read_cache_version": 19, "rollup_schema_version": 5} {
+	for table, want := range map[string]int{"read_cache_version": 20, "rollup_schema_version": 5} {
 		var got int
 		if err := d.DB.QueryRowContext(t.Context(), "SELECT version FROM "+table).Scan(&got); err != nil || got != want {
 			t.Fatalf("reopened %s=%d want=%d: %v", table, got, want, err)
 		}
 	}
-	for _, table := range []string{"span_rollup", "log_rollup", "endpoint_rollup", "service_rollup", "edge_rollup", "receiver_rollup", "resource_rollup", "receiver_entity_rollup", "rollup_state", "version_rollup", "version_rollup_batches", "read_batches", "read_trace_parts", "read_trace_candidates", "read_resource_inventory", "read_resource_seconds", "read_metric_names", "read_edge_buckets"} {
+	for _, table := range []string{"span_rollup", "log_rollup", "endpoint_rollup", "service_rollup", "edge_rollup", "receiver_rollup", "resource_rollup", "receiver_entity_rollup", "rollup_state", "version_rollup", "version_rollup_batches", "read_batches", "read_trace_exemplars", "read_resource_inventory", "read_resource_seconds", "read_metric_names", "read_edge_buckets"} {
 		var count int
 		if err := d.DB.QueryRowContext(t.Context(), "SELECT count(*) FROM "+table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("previous %s survived rebuild: count=%d: %v", table, count, err)
@@ -290,7 +290,7 @@ func TestPanelRollupKeysUpgradePreviousCacheOnReopen(t *testing.T) {
 		t.Fatalf("rebuilt markers=%d: %v", markers, err)
 	}
 	var candidates int
-	if err := d.DB.QueryRowContext(t.Context(), `SELECT count(*) FROM read_trace_candidates WHERE min_start=?`, at.UnixNano()).Scan(&candidates); err != nil || candidates != len(batch.Spans) {
+	if err := d.DB.QueryRowContext(t.Context(), `SELECT count(*) FROM read_trace_exemplars WHERE start_unix_nano=?`, at.UnixNano()).Scan(&candidates); err != nil || candidates != len(batch.Spans) {
 		t.Fatalf("rebuilt exact candidates=%d: %v", candidates, err)
 	}
 	if got := assertCommittedWatermarkParity(t, d); got.IsZero() {

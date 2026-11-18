@@ -349,7 +349,7 @@ func outsideSelection() error {
 	return Problems{{Path: "from", Message: "selection does not overlap the panel window"}}
 }
 
-// Only exact namespace/service equalities can use trace candidates. Every
+// Only exact namespace/service equalities can use trace exemplars. Every
 // remaining selection keeps its generic span/log predicates.
 func (e *Executor) exemplarTraceScope(ctx context.Context, p *Panel, filters []Filter, scope Scope, dimensions map[string]string, bucket *SelectionBucket) (queryrows.Window, bool, bool, error) {
 	w := queryrows.Window{Start: scope.Start, End: scope.End, Kind: queryrows.TraceCandidateRead}

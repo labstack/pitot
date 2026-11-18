@@ -258,7 +258,7 @@ func TestResourceInventoryAtomicSignalAndMarkerFailures(t *testing.T) {
 			}
 			constraint := `CHECK (signal<>` + sqlLiteral(failure) + `)`
 			if failure == "marker" {
-				if _, err := d.DB.Exec(`DROP TABLE read_batches; CREATE TABLE read_batches(batch_id VARCHAR PRIMARY KEY CHECK(batch_id<>'atomic'),replacement_id VARCHAR)`); err != nil {
+				if _, err := d.DB.Exec(`DROP TABLE read_batches; CREATE TABLE read_batches(batch_id VARCHAR PRIMARY KEY CHECK(batch_id<>'atomic'))`); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -269,7 +269,7 @@ func TestResourceInventoryAtomicSignalAndMarkerFailures(t *testing.T) {
 			if _, err := d.RefreshReadCaches(t.Context()); err == nil {
 				t.Fatal("injected failure succeeded")
 			}
-			for _, table := range []string{"read_batches", "read_resource_inventory", "read_trace_parts", "read_trace_candidates"} {
+			for _, table := range []string{"read_batches", "read_resource_inventory", "read_trace_exemplars"} {
 				var count int
 				if err := d.DB.QueryRow(`SELECT count(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
 					t.Fatalf("partial %s=%d %v", table, count, err)

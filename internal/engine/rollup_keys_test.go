@@ -73,7 +73,7 @@ func TestCachedReadScopesAcceptNUL(t *testing.T) {
 	}
 	w := queryrows.Window{Start: at.Add(-time.Second), End: at.Add(time.Minute), Namespace: ns, Service: svc, Kind: queryrows.TraceCandidateRead}
 	ctx := inventoryContext(t.Context(), w)
-	for _, relation := range []string{"trace_candidates", "resource_inventory"} {
+	for _, relation := range []string{"trace_exemplars", "resource_inventory"} {
 		var count int
 		if err := d.QueryRowScan(ctx, []any{&count}, "SELECT count(*) FROM "+relation); err != nil || count != 1 {
 			t.Fatalf("%s: count=%d: %v", relation, count, err)

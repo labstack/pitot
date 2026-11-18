@@ -72,8 +72,8 @@ func TestSQLPanelKeepsQualifiedNamesThatACTEShadows(t *testing.T) {
 	commit(t, repo, nil, []telemetry.Log{{Body: "token=private failed", EventUnixNanos: n, TimeUnixNanos: n, IngestedAt: n}})
 	e := NewExecutor(engine, 30)
 	e.now = func() time.Time { return fixtureStart.Add(time.Hour) }
-	// DuckDB binds main.trace_candidates.x to the struct alias, never to the CTE.
-	text := "WITH trace_candidates AS (SELECT 'cte' AS x) SELECT main.trace_candidates.x AS b FROM (SELECT {'x': 42} AS trace_candidates) AS main, trace_candidates, logs WHERE $__window(logs.time)"
+	// DuckDB binds main.trace_exemplars.x to the struct alias, never to the CTE.
+	text := "WITH trace_exemplars AS (SELECT 'cte' AS x) SELECT main.trace_exemplars.x AS b FROM (SELECT {'x': 42} AS trace_exemplars) AS main, trace_exemplars, logs WHERE $__window(logs.time)"
 	d := Dashboard{Name: "CTE shadow", Time: Time{Range: "1h"}, Panels: []Panel{{ID: "p", Title: "SQL", Viz: "table", SQL: text}}}
 	results, err := e.Run(t.Context(), RunRequest{Dashboard: d})
 	if err != nil || len(results) != 1 || results[0].Status != StatusOK || results[0].Frame.Values[0][0] != float64(42) {

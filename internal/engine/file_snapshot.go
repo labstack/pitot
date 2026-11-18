@@ -209,8 +209,10 @@ func (d *Duck) bindSnapshot(ctx context.Context, db snapshotSQL, query string, w
 		sources[signal] = cleanSource(signal, physical)
 	}
 	_, inventory := compiled.names["resource_inventory"]
-	if w.Kind != queryrows.RawRead || inventory {
-		if err := d.aggregateSources(ctx, db, batches, w, inventory, sources); err != nil {
+	_, traces := compiled.names["trace_exemplars"]
+	traces = traces && w.Kind != queryrows.RawRead
+	if traces || inventory {
+		if err := d.aggregateSources(ctx, db, batches, w, inventory, traces, sources); err != nil {
 			return "", err
 		}
 	}
@@ -436,7 +438,7 @@ func (d *Duck) compileSnapshot(ctx context.Context, db snapshotSQL, query string
 	}
 	d.snapshotMisses.Add(1)
 	aliases := map[string]string{}
-	names := []string{"trace_candidates", "trace_tail", "resource_inventory", "receiver_rollup", "receiver_points", "resource_rollup", "receiver_entity_rollup"}
+	names := []string{"trace_exemplars", "resource_inventory", "receiver_rollup", "receiver_points", "resource_rollup", "receiver_entity_rollup"}
 	for _, s := range telemetry.Signals {
 		names = append(names, "telemetry."+s.Name, s.Name)
 	}
@@ -470,11 +472,10 @@ func bindCompiledSnapshot(compiled compiledSnapshot, sources map[string]string) 
 			return "", fmt.Errorf("missing snapshot relation %s", name)
 		}
 		materialization := " AS ("
-		if name == "trace_candidates" || name == "receiver_rollup" || name == "receiver_points" || name == "resource_rollup" || name == "receiver_entity_rollup" {
+		if name == "trace_exemplars" || name == "receiver_rollup" || name == "receiver_points" || name == "resource_rollup" || name == "receiver_entity_rollup" {
 			// These sources can have several consumers. Inline them so their
 			// time/key predicates reach scans instead of copying every retained
-			// candidate or receiver payload into a temporary relation.
-			// Mixed-scope candidate aggregates keep their required barriers.
+			// exemplar or receiver payload into a temporary relation.
 			materialization = " AS NOT MATERIALIZED ("
 		}
 		definitions = append(definitions, alias+materialization+body+")")

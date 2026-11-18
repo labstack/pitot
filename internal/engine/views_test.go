@@ -56,7 +56,7 @@ func TestCreateTables_CacheTablesIncludePartitionColumns(t *testing.T) {
 	rows, err := db.Query(`
 SELECT table_name, column_name
 FROM duckdb_columns()
-WHERE table_name IN ('service_rollup', 'edge_rollup', 'read_trace_parts', 'read_resource_inventory', 'rollup_state')
+WHERE table_name IN ('service_rollup', 'edge_rollup', 'read_trace_exemplars', 'read_resource_inventory', 'rollup_state')
 ORDER BY table_name, column_name`)
 	if err != nil {
 		t.Fatalf("query duckdb_columns failed: %v", err)
@@ -81,7 +81,7 @@ ORDER BY table_name, column_name`)
 	required := map[string][]string{
 		"service_rollup":          {"namespace", "bucket", "service"},
 		"edge_rollup":             {"namespace", "bucket", "caller", "callee", "edge_type"},
-		"read_trace_parts":        {"batch_id", "namespace", "service", "trace_id", "min_start", "max_start", "max_end", "has_error"},
+		"read_trace_exemplars":    {"batch_id", "namespace", "service", "minute", "trace_id", "start_unix_nano", "duration", "has_error", "in_full", "in_suffix", "in_prefix"},
 		"read_resource_inventory": {"batch_id", "signal", "namespace", "service", "resource", "first_seen", "last_seen"},
 		"rollup_state":            {"cache_key", "last_ingested_unix_nano", "updated_at"},
 	}
@@ -114,18 +114,18 @@ func TestCreateViews_AttrMacroWorks(t *testing.T) {
 	}
 }
 
-// An index on the per-trace candidate table grows with every retained trace,
-// and DuckDB loads all of it to upsert or checkpoint. At a few million traces
-// that exceeded a 1 GB memory limit, failed the checkpoint and invalidated the
-// database, so the read cache keeps no index on per-trace rows.
+// An index on per-trace rows grows with every retained trace, and DuckDB
+// loads all of it to upsert or checkpoint. At a few million traces that
+// exceeded a 1 GB memory limit, failed the checkpoint and invalidated the
+// database, so the append-only exemplar rows keep no index.
 func TestCreateTables_ReadCacheHasNoTraceIndex(t *testing.T) {
 	db := openTestDuck(t)
 	if err := CreateTables(db); err != nil {
 		t.Fatalf("CreateTables failed: %v", err)
 	}
 	var tables []string
-	rows, err := db.Query(`SELECT DISTINCT table_name FROM duckdb_constraints() WHERE table_name IN ('read_trace_candidates','read_trace_parts') AND constraint_type IN ('PRIMARY KEY','UNIQUE')
-UNION SELECT DISTINCT table_name FROM duckdb_indexes() WHERE table_name IN ('read_trace_candidates','read_trace_parts')`)
+	rows, err := db.Query(`SELECT DISTINCT table_name FROM duckdb_constraints() WHERE table_name='read_trace_exemplars' AND constraint_type IN ('PRIMARY KEY','UNIQUE')
+UNION SELECT DISTINCT table_name FROM duckdb_indexes() WHERE table_name='read_trace_exemplars'`)
 	if err != nil {
 		t.Fatal(err)
 	}

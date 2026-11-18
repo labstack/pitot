@@ -74,9 +74,10 @@ func TestSnapshotFileBindingBenchmark(t *testing.T) {
 	}
 }
 
-// Synthetic retained-index experiment: append five disjoint 1,000-span batches
-// without timing fixture creation. Existing parts/candidates model one trace per
-// two retained spans. There is no stale cleanup or compaction in this interval.
+// Synthetic retained-history experiment: append five disjoint 1,000-span
+// batches without timing fixture creation. Existing exemplar rows model the
+// retained history; a pass must not read them, so its cost stays flat. There is
+// no stale cleanup or compaction in this interval.
 func TestReadCacheAppendScalingBenchmark(t *testing.T) {
 	for _, retained := range []int{200000, 800000, 2000000, 8000000} {
 		t.Run(fmt.Sprint(retained), func(t *testing.T) {
@@ -100,52 +101,21 @@ func TestReadCacheAppendScalingBenchmark(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer d.Close()
-			parts := fmt.Sprintf(`INSERT INTO read_trace_parts SELECT 'retained','prod','api',md5(i::VARCHAR),1::BIGINT,1::BIGINT,2::BIGINT,0 FROM range(%d) t(i)`, retained/2)
-			if _, err := d.DB.Exec(parts); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := d.DB.Exec(`INSERT INTO read_trace_candidates SELECT trace_id,namespace,service,min_start,max_start,max_end,has_error FROM read_trace_parts`); err != nil {
+			rows := fmt.Sprintf(`INSERT INTO read_trace_exemplars SELECT 'retained','prod','api',(i//1000)*60000000000,md5(i::VARCHAR),(i//1000)*60000000000+i%%1000,1,0,i%%50=0,true,true FROM range(%d) t(i)`, retained)
+			if _, err := d.DB.Exec(rows); err != nil {
 				t.Fatal(err)
 			}
 			var timings []float64
 			for _, b := range repo.Parquet.BatchMetadata() {
 				started := time.Now()
-				if _, err := d.cacheBatches(t.Context(), []telemetry.BatchMetadata{b}, nil, nil); err != nil {
+				if _, err := d.cacheBatches(t.Context(), []telemetry.BatchMetadata{b}, nil); err != nil {
 					t.Fatal(err)
 				}
 				timings = append(timings, float64(time.Since(started))/float64(time.Millisecond))
 			}
 			sort.Float64s(timings)
-			data, _ := json.Marshal(map[string]any{"retained_spans": retained, "retained_trace_rows": retained / 2, "added_spans_per_pass": 1000, "passes": 5, "median_ms": timings[2], "p95_ms": timings[4]})
+			data, _ := json.Marshal(map[string]any{"retained_exemplar_rows": retained, "added_spans_per_pass": 1000, "passes": 5, "median_ms": timings[2], "p95_ms": timings[4]})
 			t.Log("RESULT", string(data))
-			for _, hint := range []string{"MATERIALIZED", "NOT MATERIALIZED"} {
-				stmt := `WITH candidates AS ` + hint + ` (SELECT trace_id,min_start,max_end,has_error FROM read_trace_candidates),
-    tail AS (SELECT 'new0-0'::VARCHAR AS trace_id,1::BIGINT AS min_start,2::BIGINT AS max_end,0::INTEGER AS has_error),
-    untouched AS (SELECT * FROM candidates WHERE trace_id NOT IN (SELECT trace_id FROM tail) ORDER BY has_error DESC,max_end-min_start DESC,trace_id LIMIT 1),
-    touched AS (SELECT t.trace_id,least(t.min_start,c.min_start) AS min_start,greatest(t.max_end,c.max_end) AS max_end,greatest(t.has_error,c.has_error) AS has_error FROM tail t LEFT JOIN candidates c ON t.trace_id=c.trace_id),
-    choices AS (SELECT * FROM untouched UNION ALL SELECT * FROM touched)
-    SELECT trace_id FROM choices ORDER BY has_error DESC,max_end-min_start DESC,trace_id LIMIT 1`
-				var id string
-				if err := d.DB.QueryRow(stmt).Scan(&id); err != nil {
-					t.Fatal(err)
-				}
-				timings := []float64{}
-				for range 5 {
-					started := time.Now()
-					if err := d.DB.QueryRow(stmt).Scan(&id); err != nil {
-						t.Fatal(err)
-					}
-					timings = append(timings, float64(time.Since(started))/float64(time.Millisecond))
-				}
-				sort.Float64s(timings)
-				data, _ := json.Marshal(map[string]any{"experiment": "trace_candidate_materialization", "retained_spans": retained, "hint": hint, "median_ms": timings[2], "p95_ms": timings[4]})
-				t.Log("RESULT", string(data))
-				var key, plan string
-				if err := d.DB.QueryRow("EXPLAIN (FORMAT JSON) "+stmt).Scan(&key, &plan); err != nil {
-					t.Fatal(err)
-				}
-				t.Logf("PLAN retained_spans=%d hint=%s %s", retained, hint, plan)
-			}
 		})
 	}
 }
