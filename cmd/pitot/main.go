@@ -298,8 +298,11 @@ func main() {
 	// typed query kernel through deterministic HTTP or standard MCP tools.
 	// Route both HTTP and MCP reads through Duck's retrying adapter. Passing the
 	// raw *sql.DB here bypassed the Telemetry maintenance-race protection.
-	queries := observability.New(q, q, cfg.RetentionDays)
 	panels := query.NewExecutor(q, cfg.RetentionDays)
+	// The observability readers call the engine directly, so route them through
+	// the executor's interactive admission lane; otherwise they oversubscribe the
+	// read pool and starve admitted panels under a saturating dashboard.
+	queries := observability.New(panels.AdmitReader(q), q, cfg.RetentionDays)
 	writer.SetAdmission(repository.CompactionDebt, panels.InteractiveRefusals)
 	go func() {
 		err := writer.Run(ctx)
@@ -313,11 +316,14 @@ func main() {
 	}()
 	q.SetReadPressure(panels.Pressure)
 	go q.RunRollups(ctx)
-	panels.SetRollupReader(queries)
+	// Panel rollup reads already run inside an admitted panel slot, so the rollup
+	// reader uses the raw engine. Admitting it again would make a one-slot pool
+	// deadlock: the panel holds the only slot while its nested read waits for one.
+	panels.SetRollupReader(observability.New(q, q, cfg.RetentionDays))
 	panels.SetCacheTTL(cfg.QueryCacheTTL)
 	api.RegisterQueryRoutes(e, panels)
 	api.RegisterPitotQLRoutes(e, q, panels)
-	api.RegisterAnnotationRoutes(e, annotations.New(q))
+	api.RegisterAnnotationRoutes(e, annotations.New(panels.AdmitReader(q)))
 	api.RegisterTraceRoutes(e, panels.CachedTraces(queries), cfg.RetentionDays)
 	api.RegisterIntelligenceRoutes(e, detector)
 	dashboards := dashboard.New(sqlite.DB, panels)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/pitot/internal/annotations"
+	"github.com/labstack/pitot/internal/query"
 )
 
 type AnnotationReader interface {
@@ -21,16 +22,18 @@ func RegisterAnnotationRoutes(e *echo.Echo, service AnnotationReader) {
 		}
 		out, err := service.Read(c.Request().Context(), req)
 		if err != nil {
-			return annotationError(err)
+			return annotationError(c, err)
 		}
 		return c.JSON(http.StatusOK, out)
 	}, RequireCapability(ReadTelemetry))
 }
 
-func annotationError(err error) error {
+func annotationError(c *echo.Context, err error) error {
 	switch {
 	case errors.Is(err, annotations.ErrRequest):
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error()).Wrap(err)
+	case errors.Is(err, query.ErrBusy):
+		return busyError(c)
 	case errors.Is(err, context.DeadlineExceeded):
 		return echo.NewHTTPError(http.StatusGatewayTimeout, "Annotations took longer than 10 seconds").Wrap(err)
 	case errors.Is(err, context.Canceled):
