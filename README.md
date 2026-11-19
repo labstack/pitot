@@ -180,7 +180,7 @@ quality gate. See the [performance methodology](https://pitot.dev/docs/concepts/
 
 ## Build from source
 
-- **Go 1.27.3 and a C/C++ toolchain** on native Linux or macOS, amd64 or arm64.
+- **Go 1.27.4 and a C/C++ toolchain** on native Linux or macOS, amd64 or arm64.
   Build with `just build` or `bash scripts/with-duckdb.sh go build ./cmd/pitot`;
   the wrapper supplies DuckDB's pinned headers, static libraries, and CGO flags.
   The first build needs network access to download the checksum-verified engine.
