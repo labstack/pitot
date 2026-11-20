@@ -136,3 +136,61 @@ func TestLogIndexRejectsRowsBeyondU32(t *testing.T) {
 		t.Fatal("log index accepted a file beyond u32 rows")
 	}
 }
+
+// A hash shared by two trace IDs posts both traces' rows under one entry. The
+// read must keep only the exact trace ID; verification, which rebuilds the
+// index from real hashes, must reject the crafted collision.
+func TestTraceLogsResolveHashCollisionsByTraceID(t *testing.T) {
+	root := t.TempDir()
+	store, err := OpenParquetStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs []Log
+	for i := range 20 {
+		trace := []string{"x", "y", ""}[i%3]
+		logs = append(logs, Log{Namespace: "prod", ServiceName: "svc", TraceID: trace, SpanID: fmt.Sprint(i), Body: fmt.Sprint("body ", i), TimeUnixNanos: int64(100 + i)})
+	}
+	if err := store.CommitBatch(t.Context(), &BatchMetadata{ID: "collide"}, nil, logs, nil); err != nil {
+		t.Fatal(err)
+	}
+	dir := store.BatchPath("collide")
+	// Post every traced row under x's hash.
+	hash := xxh3.HashString("x")
+	var pairs []logPosting
+	if err := scanLogTraceHashes(filepath.Join(dir, "logs.parquet"), len(logs), func(row uint32, _ uint64) { pairs = append(pairs, logPosting{hash, row}) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "logs.fidx")); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := newLogIndexWriter(filepath.Join(dir, "logs.fidx"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Pass(pairs); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenParquetStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.TraceLogs(t.Context(), TraceQuery{TraceID: "x", StartNanos: 0, EndNanos: 1000, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 7 {
+		t.Fatalf("x logs = %d, want 7", len(got))
+	}
+	for i, log := range got {
+		if log.TraceID != "x" || (i > 0 && log.TimeUnixNanos <= got[i-1].TimeUnixNanos) {
+			t.Fatalf("collision read %+v", got)
+		}
+	}
+	if err := ValidatePublishedBatch(dir); !IsBatchCorrupt(err) {
+		t.Fatalf("verification of a crafted collision: %v", err)
+	}
+}
