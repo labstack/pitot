@@ -2711,6 +2711,20 @@ func (d *Duck) Trace(ctx context.Context, query telemetry.TraceQuery) ([]telemet
 	return d.repository.Parquet.Trace(ctx, query)
 }
 
+// TraceLogs pins the immutable Parquet snapshot for the indexed log read.
+func (d *Duck) TraceLogs(ctx context.Context, query telemetry.TraceQuery) ([]telemetry.TraceLog, error) {
+	pin := d.pinParquet()
+	defer d.unpinParquet(pin)
+	return d.repository.Parquet.TraceLogs(ctx, query)
+}
+
+// TraceDetail pins one snapshot for a trace's spans and logs together.
+func (d *Duck) TraceDetail(ctx context.Context, query telemetry.TraceQuery) (telemetry.TraceDetail, error) {
+	pin := d.pinParquet()
+	defer d.unpinParquet(pin)
+	return d.repository.Parquet.TraceDetail(ctx, query)
+}
+
 // TraceSummaries pins one snapshot for the bounded multi-trace root pass.
 func (d *Duck) TraceSummaries(ctx context.Context, ids []telemetry.TraceIdentity, start, end int64) ([]telemetry.TraceTotals, error) {
 	pin := d.pinParquet()

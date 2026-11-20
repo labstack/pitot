@@ -306,7 +306,7 @@ func main() {
 	// observability tools, and the annotation route below) are admitted through
 	// the interactive lane so they cannot oversubscribe the read pool.
 	queries := observability.New(q, q, cfg.RetentionDays)
-	admittedQueries := observability.New(panels.AdmitReader(q), q, cfg.RetentionDays)
+	admittedQueries := observability.New(panels.AdmitReader(q), panels.AdmitTraceDetail(q), cfg.RetentionDays)
 	writer.SetAdmission(repository.CompactionDebt, panels.InteractiveRefusals)
 	go func() {
 		err := writer.Run(ctx)

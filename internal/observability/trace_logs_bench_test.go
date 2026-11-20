@@ -95,8 +95,8 @@ func TestTraceDetailLogsBenchmark(t *testing.T) {
 		}
 		spans = append(spans, ms(time.Since(started)))
 		started = time.Now()
-		if _, err := svc.traceLogsFromParquet(t.Context(), scope, trace, "prod", false, 100); err != nil {
-			t.Fatal(err)
+		if got, err := d.TraceLogs(t.Context(), telemetry.TraceQuery{TraceID: trace, Namespace: "prod", StartNanos: scope.Start.UnixNano(), EndNanos: scope.End.UnixNano(), Limit: 100}); err != nil || len(got) != 2 {
+			t.Fatalf("logs=%d err=%v", len(got), err)
 		}
 		logs = append(logs, ms(time.Since(started)))
 		started = time.Now()

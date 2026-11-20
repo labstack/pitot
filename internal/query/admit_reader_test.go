@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/labstack/pitot/internal/queryrows"
+	"github.com/labstack/pitot/internal/telemetry"
 )
 
 type fakeRows struct{ closed *bool }
@@ -151,5 +152,39 @@ func TestAdmittedReaderForwardsTheDefaultNamespace(t *testing.T) {
 	}
 	if got := ns.DefaultNamespace(); got != "edge" {
 		t.Fatalf("DefaultNamespace=%q, want edge", got)
+	}
+}
+
+type fakeTraceDetail struct{ read func() }
+
+func (f fakeTraceDetail) TraceDetail(context.Context, telemetry.TraceQuery) (telemetry.TraceDetail, error) {
+	f.read()
+	return telemetry.TraceDetail{}, nil
+}
+
+// An indexed trace read holds one interactive slot while it reads and is shed
+// as ErrBusy when the lane is full, as the DuckDB log query it replaced was.
+func TestAdmittedTraceDetailHoldsOneSlotAndSheds(t *testing.T) {
+	e := newAdmissionFixture(t, 1, 0, 1)
+	reader := e.AdmitTraceDetail(fakeTraceDetail{read: func() {
+		if e.admission.active[interactiveClass] != 1 {
+			t.Fatalf("slot not held during the read: active=%d", e.admission.active[interactiveClass])
+		}
+	}})
+	if _, err := reader.TraceDetail(t.Context(), telemetry.TraceQuery{}); err != nil {
+		t.Fatal(err)
+	}
+	if e.admission.active[interactiveClass] != 0 {
+		t.Fatalf("slot not released: active=%d", e.admission.active[interactiveClass])
+	}
+	e.admission.bounds[interactiveClass] = 0
+	if err := e.admission.acquire(t.Context(), interactiveClass); err != nil {
+		t.Fatal(err)
+	}
+	shed := e.AdmitTraceDetail(fakeTraceDetail{read: func() { t.Fatal("read ran on a shed trace") }})
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := shed.TraceDetail(ctx, telemetry.TraceQuery{}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("err=%v, want ErrBusy", err)
 	}
 }

@@ -480,27 +480,81 @@ type TraceTotals struct {
 // request memory without bound. The totals it returns describe the whole trace,
 // not the page the limit admitted.
 func (p *ParquetStore) Trace(ctx context.Context, query TraceQuery) ([]IndexedSpan, TraceTotals, error) {
-	var totals TraceTotals
-	services := make(map[string]struct{}, 8)
 	if query.TraceID == "" {
-		return nil, totals, nil
+		return nil, TraceTotals{}, nil
 	}
+	if err := query.validate(); err != nil {
+		return nil, TraceTotals{}, err
+	}
+	return traceSpans(ctx, p.catalog(), query)
+}
+
+// TraceDetail reads a trace's spans and logs from one capture of the catalog,
+// so a publication between the two reads cannot pair the spans of one
+// catalog with the logs of another. Both reads take query.Limit.
+func (p *ParquetStore) TraceDetail(ctx context.Context, query TraceQuery) (TraceDetail, error) {
+	if query.TraceID == "" {
+		return TraceDetail{}, nil
+	}
+	if err := query.validate(); err != nil {
+		return TraceDetail{}, err
+	}
+	batches := p.catalog()
+	spans, totals, err := traceSpans(ctx, batches, query)
+	if err != nil {
+		return TraceDetail{}, err
+	}
+	logs, err := traceLogs(ctx, batches, query)
+	if err != nil {
+		return TraceDetail{}, err
+	}
+	return TraceDetail{Spans: spans, Totals: totals, Logs: logs}, nil
+}
+
+// TraceDetail is one trace's span page, its whole-trace totals and its log page.
+type TraceDetail struct {
+	Spans  []IndexedSpan
+	Totals TraceTotals
+	Logs   []TraceLog
+}
+
+func (query TraceQuery) validate() error {
 	if query.Limit <= 0 {
-		return nil, totals, errors.New("trace query limit must be positive")
+		return errors.New("trace query limit must be positive")
 	}
 	if query.Limit > maxTraceQueryResults {
-		return nil, totals, fmt.Errorf("trace query limit exceeds %d", maxTraceQueryResults)
+		return fmt.Errorf("trace query limit exceeds %d", maxTraceQueryResults)
 	}
 	if query.StartNanos >= query.EndNanos {
-		return nil, totals, errors.New("trace query time range must be positive")
+		return errors.New("trace query time range must be positive")
 	}
-	hash := xxh3.HashString(query.TraceID)
+	return nil
+}
+
+// matches applies the scope a trace read shares between spans and logs: the
+// exact trace ID, the window, and the namespace when the scope names one or
+// the trace's namespace is exact.
+func (query TraceQuery) matches(traceID, namespace string, at int64) bool {
+	return traceID == query.TraceID && at >= query.StartNanos && at < query.EndNanos &&
+		(!query.ExactNamespace && query.Namespace == "" || namespace == query.Namespace)
+}
+
+// catalog captures the installed batches. A caller that opens their files
+// pins first.
+func (p *ParquetStore) catalog() []*storedBatch {
 	p.mu.RLock()
+	defer p.mu.RUnlock()
 	batches := make([]*storedBatch, 0, len(p.batches))
 	for _, batch := range p.batches {
 		batches = append(batches, batch)
 	}
-	p.mu.RUnlock()
+	return batches
+}
+
+func traceSpans(ctx context.Context, batches []*storedBatch, query TraceQuery) ([]IndexedSpan, TraceTotals, error) {
+	var totals TraceTotals
+	services := make(map[string]struct{}, 8)
+	hash := xxh3.HashString(query.TraceID)
 	selected := make(indexedSpanHeap, 0, query.Limit)
 	for _, batch := range batches {
 		if err := ctx.Err(); err != nil {
@@ -563,7 +617,7 @@ func readIndexedTrace(ctx context.Context, batch *storedBatch, match traceRange,
 	reader := parquet.NewGenericReader[indexedSpanRow](file)
 	defer func() { err = errors.Join(err, reader.Close(), file.Close()) }()
 	return readIndexedRange(ctx, reader, match, query.EndNanos, func(row indexedSpanRow) {
-		if row.TraceID != query.TraceID || row.StartUnixNano < query.StartNanos || row.StartUnixNano >= query.EndNanos || ((query.ExactNamespace || query.Namespace != "") && row.Namespace != query.Namespace) {
+		if !query.matches(row.TraceID, row.Namespace, row.StartUnixNano) {
 			return
 		}
 		accumulateTraceRow(row, totals, services)
@@ -651,13 +705,7 @@ func (p *ParquetStore) TraceSummaries(ctx context.Context, ids []TraceIdentity, 
 	}
 	slices.Sort(hashes)
 	hashes = slices.Compact(hashes)
-	p.mu.RLock()
-	batches := make([]*storedBatch, 0, len(p.batches))
-	for _, batch := range p.batches {
-		batches = append(batches, batch)
-	}
-	p.mu.RUnlock()
-	for _, batch := range batches {
+	for _, batch := range p.catalog() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
