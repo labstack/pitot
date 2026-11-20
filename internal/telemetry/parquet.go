@@ -30,7 +30,7 @@ const (
 	SchemaBatch = "_schema" + BatchSuffix
 	// scripts/release-notes.sh reads this declaration to mark format-changing
 	// releases; keep it a single integer literal.
-	batchMetadataVersion = 5
+	batchMetadataVersion = 6
 	parquetPageSize      = 64 << 10
 	// A column whose distinct values outgrow this switches to plain pages for
 	// the rest of its row group, so client-supplied text cannot grow a
@@ -64,7 +64,7 @@ type BatchMetadata struct {
 	// Zero means not measured.
 	Bytes int64 `json:"-"`
 	// Event times come from fixed-schema Parquet footer statistics, not ingest
-	// timestamps. They are derived on publication/load and never change format 5.
+	// timestamps. They are derived on publication/load and never change the persisted format.
 	SpanTime   TimeRange `json:"-"`
 	LogTime    TimeRange `json:"-"`
 	MetricTime TimeRange `json:"-"`
@@ -112,6 +112,19 @@ type storedBatch struct {
 	metadata BatchMetadata
 	dir      string
 	traces   traceIndex
+	logs     logIndex
+}
+
+// publishAt moves a validated batch's sidecar paths to the directory it is
+// renamed to.
+func (b *storedBatch) publishAt(dir string) {
+	b.dir = dir
+	if b.metadata.Spans > 0 {
+		b.traces.path = filepath.Join(dir, "trace.fidx")
+	}
+	if b.metadata.Logs > 0 {
+		b.logs.path = filepath.Join(dir, "logs.fidx")
+	}
 }
 
 type ParquetStore struct {
@@ -142,6 +155,9 @@ type ParquetStore struct {
 	pinned      map[uint64]int
 	retiring    []retirement
 	retiringIDs map[string]BatchMetadata
+
+	// footers keeps trace reads from reparsing large compacted footers.
+	footers footerCache
 }
 
 type ParquetStats struct {
@@ -181,7 +197,12 @@ func OpenParquetStore(dir string) (*ParquetStore, error) {
 	return p, nil
 }
 
-func (p *ParquetStore) Close() error       { return nil }
+// Close releases the footer cache's open files.
+func (p *ParquetStore) Close() error {
+	p.footers.close()
+	return nil
+}
+
 func (p *ParquetStore) Dir() string        { return p.dir }
 func (p *ParquetStore) BatchesDir() string { return p.batchesDir }
 
@@ -208,15 +229,30 @@ type ParquetMergeStats struct {
 // MergeParquet rewrites immutable files into one native Parquet output. Span
 // rows retain the index order required by trace.fidx and build that sidecar as
 // they are copied; the other signals keep their input order. Re-encoding also
-// consolidates tiny ingest row groups.
+// consolidates tiny ingest row groups. A logs output gets logs.fidx, derived
+// from the merged file as a commit's is rather than remapped from the inputs'
+// postings.
 func (p *ParquetStore) MergeParquet(ctx context.Context, signal string, inputs []string, output string) (ParquetMergeStats, error) {
 	var stats ParquetMergeStats
 	s, ok := LookupSignal(signal)
 	if !ok {
 		return stats, fmt.Errorf("unsupported Parquet signal %q", signal)
 	}
-	err := mergeParquet(ctx, s, inputs, output, &stats)
-	return stats, err
+	if err := mergeParquet(ctx, s, inputs, output, &stats); err != nil {
+		return stats, err
+	}
+	if s == Logs {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
+		if stats.Rows > math.MaxUint32 {
+			return stats, fmt.Errorf("compacted logs file has %d rows; the log index addresses at most %d", stats.Rows, uint64(math.MaxUint32))
+		}
+		if err := writeLogIndex(ctx, output, filepath.Join(filepath.Dir(output), "logs.fidx"), int(stats.Rows)); err != nil {
+			return stats, fmt.Errorf("write log index: %w", err)
+		}
+	}
+	return stats, nil
 }
 
 // BatchMetadata returns the installed batches in canonical order: generation,
@@ -361,10 +397,7 @@ func (p *ParquetStore) CommitBatch(ctx context.Context, metadata *BatchMetadata,
 	if prepared.metadata.ID != metadata.ID {
 		return fmt.Errorf("staged Parquet metadata ID %q does not match batch ID %q", prepared.metadata.ID, metadata.ID)
 	}
-	prepared.dir = final
-	if prepared.metadata.Spans > 0 {
-		prepared.traces.path = filepath.Join(final, "trace.fidx")
-	}
+	prepared.publishAt(final)
 
 	if err := p.lockCommitPublish(ctx); err != nil {
 		return err
@@ -455,27 +488,81 @@ type TraceTotals struct {
 // request memory without bound. The totals it returns describe the whole trace,
 // not the page the limit admitted.
 func (p *ParquetStore) Trace(ctx context.Context, query TraceQuery) ([]IndexedSpan, TraceTotals, error) {
-	var totals TraceTotals
-	services := make(map[string]struct{}, 8)
 	if query.TraceID == "" {
-		return nil, totals, nil
+		return nil, TraceTotals{}, nil
 	}
+	if err := query.validate(); err != nil {
+		return nil, TraceTotals{}, err
+	}
+	return traceSpans(ctx, &p.footers, p.catalog(), query)
+}
+
+// TraceDetail reads a trace's spans and logs from one capture of the catalog,
+// so a publication between the two reads cannot pair the spans of one
+// catalog with the logs of another. Both reads take query.Limit.
+func (p *ParquetStore) TraceDetail(ctx context.Context, query TraceQuery) (TraceDetail, error) {
+	if query.TraceID == "" {
+		return TraceDetail{}, nil
+	}
+	if err := query.validate(); err != nil {
+		return TraceDetail{}, err
+	}
+	batches := p.catalog()
+	spans, totals, err := traceSpans(ctx, &p.footers, batches, query)
+	if err != nil {
+		return TraceDetail{}, err
+	}
+	logs, err := traceLogs(ctx, &p.footers, batches, query)
+	if err != nil {
+		return TraceDetail{}, err
+	}
+	return TraceDetail{Spans: spans, Totals: totals, Logs: logs}, nil
+}
+
+// TraceDetail is one trace's span page, its whole-trace totals and its log page.
+type TraceDetail struct {
+	Spans  []IndexedSpan
+	Totals TraceTotals
+	Logs   []TraceLog
+}
+
+func (query TraceQuery) validate() error {
 	if query.Limit <= 0 {
-		return nil, totals, errors.New("trace query limit must be positive")
+		return errors.New("trace query limit must be positive")
 	}
 	if query.Limit > maxTraceQueryResults {
-		return nil, totals, fmt.Errorf("trace query limit exceeds %d", maxTraceQueryResults)
+		return fmt.Errorf("trace query limit exceeds %d", maxTraceQueryResults)
 	}
 	if query.StartNanos >= query.EndNanos {
-		return nil, totals, errors.New("trace query time range must be positive")
+		return errors.New("trace query time range must be positive")
 	}
-	hash := xxh3.HashString(query.TraceID)
+	return nil
+}
+
+// matches applies the scope a trace read shares between spans and logs: the
+// exact trace ID, the window, and the namespace when the scope names one or
+// the trace's namespace is exact.
+func (query TraceQuery) matches(traceID, namespace string, at int64) bool {
+	return traceID == query.TraceID && at >= query.StartNanos && at < query.EndNanos &&
+		(!query.ExactNamespace && query.Namespace == "" || namespace == query.Namespace)
+}
+
+// catalog captures the installed batches. A caller that opens their files
+// pins first.
+func (p *ParquetStore) catalog() []*storedBatch {
 	p.mu.RLock()
+	defer p.mu.RUnlock()
 	batches := make([]*storedBatch, 0, len(p.batches))
 	for _, batch := range p.batches {
 		batches = append(batches, batch)
 	}
-	p.mu.RUnlock()
+	return batches
+}
+
+func traceSpans(ctx context.Context, footers *footerCache, batches []*storedBatch, query TraceQuery) ([]IndexedSpan, TraceTotals, error) {
+	var totals TraceTotals
+	services := make(map[string]struct{}, 8)
+	hash := xxh3.HashString(query.TraceID)
 	selected := make(indexedSpanHeap, 0, query.Limit)
 	for _, batch := range batches {
 		if err := ctx.Err(); err != nil {
@@ -492,7 +579,7 @@ func (p *ParquetStore) Trace(ctx context.Context, query TraceQuery) ([]IndexedSp
 		if !found {
 			continue
 		}
-		if err := readIndexedTrace(ctx, batch, match, query, &selected, &totals, services); err != nil {
+		if err := readIndexedTrace(ctx, footers, batch, match, query, &selected, &totals, services); err != nil {
 			return nil, totals, err
 		}
 	}
@@ -530,15 +617,14 @@ func (r indexedSpanRow) span() IndexedSpan {
 	}
 }
 
-func readIndexedTrace(ctx context.Context, batch *storedBatch, match traceRange, query TraceQuery, selected *indexedSpanHeap, totals *TraceTotals, services map[string]struct{}) (err error) {
-	file, err := os.Open(filepath.Join(batch.dir, "spans.parquet"))
+func readIndexedTrace(ctx context.Context, footers *footerCache, batch *storedBatch, match traceRange, query TraceQuery, selected *indexedSpanHeap, totals *TraceTotals, services map[string]struct{}) (err error) {
+	reader, closeReader, err := openCachedReader[indexedSpanRow](footers, filepath.Join(batch.dir, "spans.parquet"))
 	if err != nil {
 		return err
 	}
-	reader := parquet.NewGenericReader[indexedSpanRow](file)
-	defer func() { err = errors.Join(err, reader.Close(), file.Close()) }()
+	defer func() { err = errors.Join(err, closeReader()) }()
 	return readIndexedRange(ctx, reader, match, query.EndNanos, func(row indexedSpanRow) {
-		if row.TraceID != query.TraceID || row.StartUnixNano < query.StartNanos || row.StartUnixNano >= query.EndNanos || ((query.ExactNamespace || query.Namespace != "") && row.Namespace != query.Namespace) {
+		if !query.matches(row.TraceID, row.Namespace, row.StartUnixNano) {
 			return
 		}
 		accumulateTraceRow(row, totals, services)
@@ -626,20 +712,14 @@ func (p *ParquetStore) TraceSummaries(ctx context.Context, ids []TraceIdentity, 
 	}
 	slices.Sort(hashes)
 	hashes = slices.Compact(hashes)
-	p.mu.RLock()
-	batches := make([]*storedBatch, 0, len(p.batches))
-	for _, batch := range p.batches {
-		batches = append(batches, batch)
-	}
-	p.mu.RUnlock()
-	for _, batch := range batches {
+	for _, batch := range p.catalog() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if bounds := batch.metadata.SpanTime; bounds.Known && (bounds.MaxNanos < start || bounds.MinNanos >= end) {
 			continue
 		}
-		if err := readBatchTraceSummaries(ctx, batch, hashes, end, func(row indexedSpanRow) {
+		if err := readBatchTraceSummaries(ctx, &p.footers, batch, hashes, end, func(row indexedSpanRow) {
 			if row.StartUnixNano < start || row.StartUnixNano >= end {
 				return
 			}
@@ -659,7 +739,7 @@ func (p *ParquetStore) TraceSummaries(ctx context.Context, ids []TraceIdentity, 
 	return totals, nil
 }
 
-func readBatchTraceSummaries(ctx context.Context, batch *storedBatch, hashes []uint64, end int64, visit func(indexedSpanRow)) (err error) {
+func readBatchTraceSummaries(ctx context.Context, footers *footerCache, batch *storedBatch, hashes []uint64, end int64, visit func(indexedSpanRow)) (err error) {
 	if len(hashes) == 0 || batch.traces.entries == 0 {
 		return nil
 	}
@@ -681,12 +761,11 @@ func readBatchTraceSummaries(ctx context.Context, batch *storedBatch, hashes []u
 	if len(matches) == 0 {
 		return nil
 	}
-	file, err := os.Open(filepath.Join(batch.dir, "spans.parquet"))
+	reader, closeReader, err := openCachedReader[indexedSpanRow](footers, filepath.Join(batch.dir, "spans.parquet"))
 	if err != nil {
 		return err
 	}
-	reader := parquet.NewGenericReader[indexedSpanRow](file)
-	defer func() { err = errors.Join(err, reader.Close(), file.Close()) }()
+	defer func() { err = errors.Join(err, closeReader()) }()
 	for _, match := range matches {
 		if err := readIndexedRange(ctx, reader, match, end, visit); err != nil {
 			return err
@@ -877,10 +956,7 @@ func (p *ParquetStore) PublishReplacement(stage string, metadata BatchMetadata, 
 	if err != nil {
 		return err
 	}
-	replacement.dir = final
-	if replacement.metadata.Spans > 0 {
-		replacement.traces.path = filepath.Join(final, "trace.fidx")
-	}
+	replacement.publishAt(final)
 	return publish(func(ctx context.Context) error {
 		if err := p.lockPublish(ctx); err != nil {
 			return err
@@ -1226,14 +1302,24 @@ func loadStoredBatch(dir string) (*storedBatch, error) {
 		}
 		*fields.time = parquetTimeRange(parquetFile, signal.Time)
 	}
-	var traces traceIndex
+	batch := &storedBatch{metadata: metadata, dir: dir}
 	if metadata.Spans > 0 {
-		traces, err = loadTraceIndex(filepath.Join(dir, "trace.fidx"), metadata.Spans)
-		if err != nil {
+		if batch.traces, err = loadTraceIndex(filepath.Join(dir, "trace.fidx"), metadata.Spans); err != nil {
 			return nil, err
 		}
 	}
-	return &storedBatch{metadata: metadata, dir: dir, traces: traces}, nil
+	logIndexPath := filepath.Join(dir, "logs.fidx")
+	if metadata.Logs > 0 {
+		if batch.logs, err = loadLogIndex(logIndexPath, metadata.Logs); err != nil {
+			return nil, err
+		}
+	} else if _, err := os.Lstat(logIndexPath); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("log index exists but metadata declares zero log rows")
+	}
+	return batch, nil
 }
 
 // checkColumnPaths requires every column chunk to name its schema leaf.
@@ -1330,7 +1416,8 @@ func (s *Signal) writerOptions() []parquet.WriterOption {
 
 // commitSignal writes one signal of a staged batch in the signal's order,
 // with its trace index when the signal has one. The index needs only the
-// sorted hashes, so it is written while the Parquet file is.
+// sorted hashes, so it is written while the Parquet file is. A logs file gets
+// its log index, derived from the file once it is written.
 func commitSignal[R any](stage string, s *Signal, rows []R) error {
 	perm, keys := sortRows(s, rows)
 	var index errgroup.Group
@@ -1346,9 +1433,14 @@ func commitSignal[R any](stage string, s *Signal, rows []R) error {
 			return nil
 		})
 	}
-	err := writeOrdered(filepath.Join(stage, s.Name+".parquet"), s, rows, perm, parquetPageSize)
+	path := filepath.Join(stage, s.Name+".parquet")
+	err := writeOrdered(path, s, rows, perm, parquetPageSize)
 	if err != nil {
 		err = fmt.Errorf("write %s Parquet: %w", s.Name, err)
+	} else if s == Logs {
+		if err = writeLogIndex(context.Background(), path, filepath.Join(stage, "logs.fidx"), len(rows)); err != nil {
+			err = fmt.Errorf("write log index: %w", err)
+		}
 	}
 	return errors.Join(err, index.Wait())
 }

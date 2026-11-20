@@ -71,7 +71,7 @@ func TestRollupSnapshotWindowUsesSignalBoundsAndIncludesUnknown(t *testing.T) {
 	for i := range captured {
 		if captured[i].ID == "unknown" {
 			// Optional footer statistics may be unavailable. Change only this
-			// captured descriptor; every underlying format-5 file remains valid.
+			// captured descriptor; every underlying format-6 file remains valid.
 			captured[i].SpanTime.Known = false
 			captured[i].LogTime.Known = false
 			captured[i].MetricTime.Known = false

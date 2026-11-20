@@ -22,12 +22,13 @@ type traceRange struct {
 	count uint64
 }
 
-// traceIndex keeps only fixed-size index metadata in memory. Entries stay in
-// the sidecar and are located with binary search, so retained trace cardinality
-// does not become retained Go heap.
+// traceIndex keeps the first hash of every block of entries in memory, 8
+// bytes per 256 traces. Entries stay in the sidecar, so retained trace
+// cardinality barely becomes retained Go heap.
 type traceIndex struct {
 	path    string
 	entries uint64
+	fences  []uint64
 }
 
 type traceIndexWriter struct {
@@ -156,6 +157,17 @@ func writeTraceIndex(path string, hashes []uint64) error {
 	return writer.Close()
 }
 
+// readIndexBytes fills buf from an index sidecar. Content that ends early is a
+// format error. Any other read failure is returned unchanged, so a failing
+// device or descriptor stays an operational error and never reads as corrupt.
+func readIndexBytes(r io.Reader, buf []byte, what string) error {
+	_, err := io.ReadFull(r, buf)
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("truncated %s", what)
+	}
+	return err
+}
+
 func loadTraceIndex(path string, spanCount int) (index traceIndex, err error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -170,7 +182,10 @@ func loadTraceIndex(path string, spanCount int) (index traceIndex, err error) {
 		return traceIndex{}, errors.New("trace index is not a regular file")
 	}
 	var header [traceIndexHeaderSize]byte
-	if _, err := io.ReadFull(file, header[:]); err != nil || string(header[:8]) != traceIndexMagic {
+	if err := readIndexBytes(file, header[:], "trace index header"); err != nil {
+		return traceIndex{}, err
+	}
+	if string(header[:8]) != traceIndexMagic {
 		return traceIndex{}, errors.New("invalid trace index header")
 	}
 	count := binary.LittleEndian.Uint64(header[8:])
@@ -181,8 +196,9 @@ func loadTraceIndex(path string, spanCount int) (index traceIndex, err error) {
 	reader := bufio.NewReaderSize(file, 64<<10)
 	var encoded [traceIndexEntrySize]byte
 	var previous traceRange
+	fences := make([]uint64, 0, (count+indexBlockEntries-1)/indexBlockEntries)
 	for i := uint64(0); i < count; i++ {
-		if _, err := io.ReadFull(reader, encoded[:]); err != nil {
+		if err := readIndexBytes(reader, encoded[:], "trace index entry"); err != nil {
 			return traceIndex{}, err
 		}
 		entry := decodeTraceRange(encoded[:])
@@ -195,6 +211,9 @@ func loadTraceIndex(path string, spanCount int) (index traceIndex, err error) {
 		if i > 0 && (previous.hash >= entry.hash || previous.row+previous.count != entry.row) {
 			return traceIndex{}, errors.New("trace index is not strictly sorted and contiguous")
 		}
+		if i%indexBlockEntries == 0 {
+			fences = append(fences, entry.hash)
+		}
 		previous = entry
 	}
 	if count > 0 {
@@ -204,7 +223,7 @@ func loadTraceIndex(path string, spanCount int) (index traceIndex, err error) {
 	} else if spanCount != 0 {
 		return traceIndex{}, errors.New("trace index is empty for a non-empty span file")
 	}
-	return traceIndex{path: path, entries: count}, nil
+	return traceIndex{path: path, entries: count, fences: fences}, nil
 }
 
 func (index traceIndex) Lookup(hash uint64) (match traceRange, found bool, err error) {
@@ -219,28 +238,17 @@ func (index traceIndex) Lookup(hash uint64) (match traceRange, found bool, err e
 	return index.lookup(file, hash)
 }
 
+// lookup reads the one block the fences select from an open index file.
 func (index traceIndex) lookup(file *os.File, hash uint64) (traceRange, bool, error) {
-	low, high := uint64(0), index.entries
-	for low < high {
-		middle := low + (high-low)/2
-		entry, readErr := readTraceRangeAt(file, middle)
-		if readErr != nil {
-			return traceRange{}, false, readErr
-		}
-		if entry.hash < hash {
-			low = middle + 1
-		} else {
-			high = middle
-		}
-	}
-	if low == index.entries {
-		return traceRange{}, false, nil
-	}
-	entry, err := readTraceRangeAt(file, low)
-	if err != nil {
+	block, err := probeBlock(file, index.fences, index.entries, traceIndexHeaderSize, traceIndexEntrySize, hash)
+	if err != nil || block == nil {
 		return traceRange{}, false, err
 	}
-	return entry, entry.hash == hash, nil
+	position, found := searchBlock(block, traceIndexEntrySize, hash)
+	if !found {
+		return traceRange{}, false, nil
+	}
+	return decodeTraceRange(block[position:]), true, nil
 }
 
 func readTraceRangeAt(file *os.File, position uint64) (traceRange, error) {

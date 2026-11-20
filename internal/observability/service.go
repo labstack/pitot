@@ -25,8 +25,9 @@ var (
 
 type DB = queryrows.Queryer
 
+// traceReader reads a trace's spans and logs through the batch indexes.
 type traceReader interface {
-	Trace(context.Context, telemetry.TraceQuery) ([]telemetry.IndexedSpan, telemetry.TraceTotals, error)
+	TraceDetail(context.Context, telemetry.TraceQuery) (telemetry.TraceDetail, error)
 }
 
 type Service struct {

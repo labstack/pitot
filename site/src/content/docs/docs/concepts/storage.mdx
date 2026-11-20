@@ -17,7 +17,7 @@ history) lives in SQLite.
 | Component | Purpose |
 |---|---|
 | Atomic Parquet batches | Authoritative retained spans, logs, and metrics |
-| Trace sidecar | Persistent row-range index for targeted trace reads from Parquet |
+| Trace sidecars | Persistent indexes from trace to span row range and log rows, for targeted trace reads from Parquet |
 | DuckDB | SQL, log filtering, broad analytical reads, and rebuildable rollups |
 | SQLite | Transactional application and identity state |
 
@@ -38,7 +38,7 @@ history) lives in SQLite.
 Concurrent small OTLP requests may share one group-commit batch. Up to four
 commit workers encode independent batches in parallel. Each worker writes all
 present signals and metadata into a staging directory, adds `trace.fidx` when
-spans are present, fsyncs them, and publishes the complete directory with one
+spans are present and `logs.fidx` when logs are present, fsyncs them, and publishes the complete directory with one
 atomic rename. Pitot
 returns success only after every batch belonging to the request is published.
 
@@ -62,9 +62,14 @@ has no idempotency key that lets Pitot recognize a resent request.
 
 Every signal is written once, to typed Zstandard-compressed Parquet. DuckDB
 applies filters, ordering, `LIMIT`, and aggregation inside its vectorized scan.
-Trace lookup binary-searches a fixed-width sidecar on disk, seeks directly to the
-matching Parquet row ranges, and verifies the complete trace ID after hashing.
-The sidecar is an index, not another telemetry representation.
+Trace lookup binary-searches a fixed-width sidecar, reading one block per
+batch through fences held in memory, seeks directly to the matching Parquet
+rows, and verifies the complete trace ID after hashing. Spans are sorted by
+trace hash, so `trace.fidx` maps a hash to one row range. Logs keep their time
+order, so `logs.fidx` maps a hash to the row numbers of the trace's logs; a
+trace's logs cost one probe per batch plus their own rows, however many logs
+are retained. Each sidecar is a pure function of its Parquet file and an
+index, not another telemetry representation.
 
 Dashboard rollups are rebuildable DuckDB caches. SQLite stores only
 transactional product state and never holds telemetry rows. Ingest
@@ -132,13 +137,14 @@ recursion with explicit hop, accumulated-node, and execution-time limits.
 
 Offline verification decodes every Parquet column with the native engine and
 separately checks physical schemas, span ordering, row counts, and trace-index
-ranges. It reuses one bounded in-memory engine and creates no spill files.
+ranges, and rebuilds each log index from its file and compares it entry by
+entry. It reuses one bounded in-memory engine and creates no spill files.
 Verification computes and discards hashes to force decoding, without storing
 a checksum.
 Verification failures such as memory exhaustion or cancellation never authorize
 quarantine.
 
-Telemetry batches use format 5. An unsupported batch format makes startup
+Telemetry batches use format 6, which adds `logs.fidx` to format 5. An unsupported batch format makes startup
 fail before cleanup or schema rewriting, leaving the files intact.
 
 ## Small files are bounded by compaction
@@ -150,7 +156,7 @@ generation. Once an hour is more than a day old, its small files may also merge
 with neighbouring hours of the same UTC day, up to 250,000 rows per file, so a
 quiet install does not keep one small file per hour for its whole retention.
 Each merge builds a replacement trace
-index, and atomically swaps the replacement for its inputs. A durable compaction
+index and log index, and atomically swaps the replacement for its inputs. A durable compaction
 marker makes an interrupted swap resumable. Active DuckDB readers pin immutable
 files while retention or compaction removes them, so reads never lose an open
 input file.
@@ -201,7 +207,7 @@ preserve candidate bounds without recomputation. Retention and incomplete
 replacements recompute only affected trace IDs from active contributions.
 A semantic version covers the cache schema and aggregation rules; a version
 change atomically discards all private
-read tables and rebuilds from authoritative format-5 Parquet. The background
+read tables and rebuilds from authoritative format-6 Parquet. The background
 worker processes bounded groups; `pitot_read_cache_pending_batches` reports its
 trace backlog independently of the service and edge rollups' publication horizon.
 Service-version observations populate their analytical rollup on a separate

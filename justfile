@@ -155,7 +155,7 @@ notices-check:
 db-gen:
     cd internal/db && sqlc generate
 
-# Regenerate the format-5 dedicated attribute keys from the pinned semconv tag (network).
+# Regenerate the format-6 dedicated attribute keys from the pinned semconv tag (network).
 semconv-generate:
     bash scripts/semconv-generate.sh
 

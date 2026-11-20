@@ -216,7 +216,7 @@ func TestPanelBenchmarkReplayRejectsLifecycleMarkersWithoutMutation(t *testing.T
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{"version":5,"id":"old","spans":1}`), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{"version":6,"id":"old","spans":1}`), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(dir, "spans.parquet"), []byte("preserve retired input"), 0o644); err != nil {

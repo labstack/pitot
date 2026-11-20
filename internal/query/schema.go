@@ -59,7 +59,7 @@ type AttributeSchema struct {
 	// those rows' counts, when rows disagree on the type.
 	Numbers []Option `json:"numbers,omitempty"`
 	// Indexed marks a standard key stored in a typed column (batch format
-	// 5): it reads as Type whatever type rows sent.
+	// 6): it reads as Type whatever type rows sent.
 	Indexed bool `json:"indexed,omitempty"`
 }
 

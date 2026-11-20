@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/labstack/pitot/internal/queryrows"
+	"github.com/labstack/pitot/internal/telemetry"
 )
 
 // AdmitReader wraps a read surface so every read it issues passes through the
@@ -70,6 +71,35 @@ func (a *admittingQueryer) DefaultNamespace() string {
 		return d.DefaultNamespace()
 	}
 	return ""
+}
+
+// TraceDetailReader reads a trace's spans and logs from the batch indexes, as
+// the engine does.
+type TraceDetailReader interface {
+	TraceDetail(context.Context, telemetry.TraceQuery) (telemetry.TraceDetail, error)
+}
+
+// AdmitTraceDetail admits each indexed trace read as one interactive read. The
+// trace's logs were a DuckDB query admitted through AdmitReader; they are now
+// read from logs.fidx beside the spans, and the pair keeps the slot, deadline
+// and shedding that query had. Trace detail reached through CachedTraces is
+// already admitted and uses the raw engine.
+func (e *Executor) AdmitTraceDetail(inner TraceDetailReader) TraceDetailReader {
+	return admittingTraces{inner: inner, exec: e}
+}
+
+type admittingTraces struct {
+	inner TraceDetailReader
+	exec  *Executor
+}
+
+func (a admittingTraces) TraceDetail(ctx context.Context, query telemetry.TraceQuery) (telemetry.TraceDetail, error) {
+	release, err := a.exec.admitInteractive(ctx)
+	if err != nil {
+		return telemetry.TraceDetail{}, err
+	}
+	defer release()
+	return a.inner.TraceDetail(ctx, query)
 }
 
 // admitInteractive takes one interactive slot, bounding the wait by the batch

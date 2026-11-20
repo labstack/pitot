@@ -30,8 +30,10 @@ func TestHigherGenerationMergeYieldsWithoutBlockingDebtRetirement(t *testing.T) 
 		if err := os.MkdirAll(stage, 0755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Link(filepath.Join(r.Parquet.BatchPath("seed"), "logs.parquet"), filepath.Join(stage, "logs.parquet")); err != nil {
-			t.Fatal(err)
+		for _, name := range []string{"logs.parquet", "logs.fidx"} {
+			if err := os.Link(filepath.Join(r.Parquet.BatchPath("seed"), name), filepath.Join(stage, name)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		m := telemetry.BatchMetadata{ID: id, Logs: 1, MinIngestedNanos: time.Now().UnixNano(), MaxIngestedNanos: time.Now().UnixNano()}
 		if err := r.Parquet.PrepareReplacement(stage, m); err != nil {
@@ -131,8 +133,10 @@ func TestHigherGenerationPublishesAfterRepeatedDebtPreemption(t *testing.T) {
 		if err := os.MkdirAll(stage, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Link(filepath.Join(r.Parquet.BatchPath("seed"), "logs.parquet"), filepath.Join(stage, "logs.parquet")); err != nil {
-			t.Fatal(err)
+		for _, name := range []string{"logs.parquet", "logs.fidx"} {
+			if err := os.Link(filepath.Join(r.Parquet.BatchPath("seed"), name), filepath.Join(stage, name)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		m := telemetry.BatchMetadata{ID: id, Generation: generation, Logs: 1, MinIngestedNanos: stamp, MaxIngestedNanos: stamp}
 		if err := r.Parquet.PrepareReplacement(stage, m); err != nil {

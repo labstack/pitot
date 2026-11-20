@@ -2,12 +2,10 @@ package observability
 
 import (
 	"context"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/labstack/pitot/internal/telemetry"
 	telemetrystore "github.com/labstack/pitot/internal/telemetry/store"
@@ -43,9 +41,6 @@ func TestTracePagedSpansStillDescribeTheWholeTrace(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery(regexp.QuoteMeta(traceLogsQuery)).
-		WithArgs("wide-trace", start, end, true, "prod", 1).
-		WillReturnRows(sqlmock.NewRows([]string{"time", "severity", "service", "body", "trace_id", "span_id"}))
 
 	result, err := svc.Trace(context.Background(), Scope{Namespace: "prod", Start: start, End: end}, "wide-trace", "", 1)
 	if err != nil {
@@ -96,9 +91,6 @@ func TestTraceWholeTraceIsNotReportedAsTruncated(t *testing.T) {
 	}}}); err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery(regexp.QuoteMeta(traceLogsQuery)).
-		WithArgs("small-trace", start, end, true, "prod", 10).
-		WillReturnRows(sqlmock.NewRows([]string{"time", "severity", "service", "body", "trace_id", "span_id"}))
 
 	result, err := svc.Trace(context.Background(), Scope{Namespace: "prod", Start: start, End: end}, "small-trace", "", 10)
 	if err != nil {

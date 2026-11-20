@@ -187,7 +187,7 @@ rtk bash scripts/with-duckdb.sh go test ./internal/query -tags=readbench \
 
 Without the `readbench` build tag this selection runs no benchmarks. The default
 generated fixture is regression data, not capacity evidence. Representative
-replay uses `PITOT_PANEL_BENCH_DATA_DIR` and must pass format-5 verification.
+replay uses `PITOT_PANEL_BENCH_DATA_DIR` and must pass format-6 verification.
 Executor measurements exclude browser paint and sustained external ingest;
 record result-cache policy and analytical warmup with their results.
 

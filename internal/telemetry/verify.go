@@ -26,7 +26,8 @@ func (e *CorruptBatchError) Unwrap() error { return e.Err }
 func IsBatchCorrupt(err error) bool        { var e *CorruptBatchError; return errors.As(err, &e) }
 
 func batchDataError(err error) error {
-	if err == nil || errors.Is(err, ErrUnsupportedBatchFormat) {
+	if err == nil || errors.Is(err, ErrUnsupportedBatchFormat) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
 	var pathErr *os.PathError
@@ -77,7 +78,7 @@ func (v *BatchVerifier) Validate(ctx context.Context, dir string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// The shared loader checks the format-5 metadata and complete physical
+	// The shared loader checks the format-6 metadata and complete physical
 	// schema before native decoding; unsupported formats are never corruption.
 	batch, err := loadRegisteredBatch(dir)
 	if err != nil {
@@ -100,6 +101,11 @@ func (v *BatchVerifier) Validate(ctx context.Context, dir string) error {
 		}
 		if signal.Traces {
 			if err := verifyTraces(path, count, batch.traces); err != nil {
+				return batchDataError(err)
+			}
+		}
+		if signal == Logs {
+			if err := verifyLogIndex(ctx, path, count, batch.logs); err != nil {
 				return batchDataError(err)
 			}
 		}

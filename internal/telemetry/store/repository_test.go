@@ -138,8 +138,8 @@ func TestRepositoryHasOneAuthoritativeStorageLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 5 {
-		t.Fatalf("batch contains %d files, want Parquet signals, trace index, and metadata", len(entries))
+	if len(entries) != 6 {
+		t.Fatalf("batch contains %d files, want Parquet signals, trace and log indexes, and metadata", len(entries))
 	}
 }
 

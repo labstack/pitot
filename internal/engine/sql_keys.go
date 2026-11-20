@@ -15,7 +15,7 @@ import (
 	"github.com/labstack/pitot/internal/telemetry/semconv"
 )
 
-// Batch format 5 copies the standard keys into typed dedicated columns
+// Batch format 6 copies the standard keys into typed dedicated columns
 // (proposal 0005), converted at ingest to the key's type; the column is the
 // key's read value. Telemetry SQL keeps writing attributes['k'] and
 // resource['k'] with a literal key, and rewriteKeys replaces each such
