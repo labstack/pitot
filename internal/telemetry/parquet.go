@@ -197,7 +197,12 @@ func OpenParquetStore(dir string) (*ParquetStore, error) {
 	return p, nil
 }
 
-func (p *ParquetStore) Close() error       { return nil }
+// Close releases the footer cache's open files.
+func (p *ParquetStore) Close() error {
+	p.footers.close()
+	return nil
+}
+
 func (p *ParquetStore) Dir() string        { return p.dir }
 func (p *ParquetStore) BatchesDir() string { return p.batchesDir }
 
@@ -243,7 +248,7 @@ func (p *ParquetStore) MergeParquet(ctx context.Context, signal string, inputs [
 		if stats.Rows > math.MaxUint32 {
 			return stats, fmt.Errorf("compacted logs file has %d rows; the log index addresses at most %d", stats.Rows, uint64(math.MaxUint32))
 		}
-		if err := writeLogIndex(output, filepath.Join(filepath.Dir(output), "logs.fidx"), int(stats.Rows)); err != nil {
+		if err := writeLogIndex(ctx, output, filepath.Join(filepath.Dir(output), "logs.fidx"), int(stats.Rows)); err != nil {
 			return stats, fmt.Errorf("write log index: %w", err)
 		}
 	}
@@ -1433,7 +1438,7 @@ func commitSignal[R any](stage string, s *Signal, rows []R) error {
 	if err != nil {
 		err = fmt.Errorf("write %s Parquet: %w", s.Name, err)
 	} else if s == Logs {
-		if err = writeLogIndex(path, filepath.Join(stage, "logs.fidx"), len(rows)); err != nil {
+		if err = writeLogIndex(context.Background(), path, filepath.Join(stage, "logs.fidx"), len(rows)); err != nil {
 			err = fmt.Errorf("write log index: %w", err)
 		}
 	}

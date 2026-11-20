@@ -114,6 +114,16 @@ func (c *footerCache) drop(dir string) {
 	}
 }
 
+// close drops every entry. Files without readers close now and the rest when
+// their last reader releases them.
+func (c *footerCache) close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, entry := range c.entries {
+		c.removeLocked(entry)
+	}
+}
+
 func (c *footerCache) removeLocked(entry *cachedFooter) {
 	delete(c.entries, entry.path)
 	c.recent.Remove(entry.element)

@@ -104,3 +104,39 @@ func TestFooterCacheSharesParsedFilesAcrossReaders(t *testing.T) {
 		t.Fatalf("shared entry = %+v", entry)
 	}
 }
+
+// Closing the cache closes idle files now and held ones on release.
+func TestFooterCacheCloseReleasesFiles(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := range 2 {
+		paths = append(paths, writeTestLogs(t, mkdir(t, filepath.Join(dir, fmt.Sprint(i)+BatchSuffix)), randomTraceLogs(newRand(i), 50)))
+	}
+	cache := footerCache{}
+	_, release, err := cache.open(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, idle, err := cache.open(paths[1]); err != nil {
+		t.Fatal(err)
+	} else if err := idle(); err != nil {
+		t.Fatal(err)
+	}
+	held, idle := cache.entries[paths[0]], cache.entries[paths[1]]
+	cache.close()
+	if len(cache.entries) != 0 || cache.recent.Len() != 0 {
+		t.Fatal("close kept entries")
+	}
+	if _, err := idle.file.Stat(); err == nil {
+		t.Fatal("close left an idle file open")
+	}
+	if _, err := held.file.Stat(); err != nil {
+		t.Fatalf("close closed a held file: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := held.file.Stat(); err == nil {
+		t.Fatal("release left a closed cache's file open")
+	}
+}

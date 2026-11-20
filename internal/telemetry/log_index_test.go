@@ -1,12 +1,16 @@
 package telemetry
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 
 	"github.com/zeebo/xxh3"
@@ -40,10 +44,10 @@ func TestLogIndexPassesMatchOneSort(t *testing.T) {
 	rows := randomTraceLogs(rand.New(rand.NewPCG(1, 2)), 5_000)
 	logs := writeTestLogs(t, dir, rows)
 	one, passes := filepath.Join(dir, "one.fidx"), filepath.Join(dir, "passes.fidx")
-	if err := buildLogIndex(logs, one, len(rows), len(rows)); err != nil {
+	if err := buildLogIndex(t.Context(), logs, one, len(rows), len(rows)); err != nil {
 		t.Fatal(err)
 	}
-	if err := buildLogIndex(logs, passes, len(rows), 300); err != nil {
+	if err := buildLogIndex(t.Context(), logs, passes, len(rows), 300); err != nil {
 		t.Fatal(err)
 	}
 	a, _ := os.ReadFile(one)
@@ -58,12 +62,12 @@ func TestLogIndexPassesMatchOneSort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyLogIndex(logs, len(rows), index); err != nil {
+	if err := verifyLogIndex(t.Context(), logs, len(rows), index); err != nil {
 		t.Fatal(err)
 	}
 	// Decode the written order, which differs from the input order.
 	want := map[uint64][]uint32{}
-	if err := scanLogTraceHashes(logs, len(rows), func(row uint32, hash uint64) { want[hash] = append(want[hash], row) }); err != nil {
+	if err := scanLogTraceHashes(t.Context(), logs, len(rows), func(row uint32, hash uint64) { want[hash] = append(want[hash], row) }); err != nil {
 		t.Fatal(err)
 	}
 	if uint64(len(want)) != index.entries || len(index.fences) != int((index.entries+indexBlockEntries-1)/indexBlockEntries) {
@@ -89,7 +93,7 @@ func TestLogIndexVerificationRejectsWrongPostings(t *testing.T) {
 	rows := randomTraceLogs(rand.New(rand.NewPCG(3, 4)), 600)
 	logs := writeTestLogs(t, dir, rows)
 	var pairs []logPosting
-	if err := scanLogTraceHashes(logs, len(rows), func(row uint32, hash uint64) { pairs = append(pairs, logPosting{hash, row}) }); err != nil {
+	if err := scanLogTraceHashes(t.Context(), logs, len(rows), func(row uint32, hash uint64) { pairs = append(pairs, logPosting{hash, row}) }); err != nil {
 		t.Fatal(err)
 	}
 	sortLogPostings(pairs)
@@ -124,7 +128,7 @@ func TestLogIndexVerificationRejectsWrongPostings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := verifyLogIndex(logs, len(rows), index); err == nil {
+			if err := verifyLogIndex(t.Context(), logs, len(rows), index); err == nil {
 				t.Fatal("verification accepted a wrong posting")
 			}
 		})
@@ -132,7 +136,7 @@ func TestLogIndexVerificationRejectsWrongPostings(t *testing.T) {
 }
 
 func TestLogIndexRejectsRowsBeyondU32(t *testing.T) {
-	if err := buildLogIndex("unused", filepath.Join(t.TempDir(), "logs.fidx"), 1<<32, logIndexPassRows); err == nil {
+	if err := buildLogIndex(t.Context(), "unused", filepath.Join(t.TempDir(), "logs.fidx"), 1<<32, logIndexPassRows); err == nil {
 		t.Fatal("log index accepted a file beyond u32 rows")
 	}
 }
@@ -158,7 +162,7 @@ func TestTraceLogsResolveHashCollisionsByTraceID(t *testing.T) {
 	// Post every traced row under x's hash.
 	hash := xxh3.HashString("x")
 	var pairs []logPosting
-	if err := scanLogTraceHashes(filepath.Join(dir, "logs.parquet"), len(logs), func(row uint32, _ uint64) { pairs = append(pairs, logPosting{hash, row}) }); err != nil {
+	if err := scanLogTraceHashes(t.Context(), filepath.Join(dir, "logs.parquet"), len(logs), func(row uint32, _ uint64) { pairs = append(pairs, logPosting{hash, row}) }); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(dir, "logs.fidx")); err != nil {
@@ -192,5 +196,45 @@ func TestTraceLogsResolveHashCollisionsByTraceID(t *testing.T) {
 	}
 	if err := ValidatePublishedBatch(dir); !IsBatchCorrupt(err) {
 		t.Fatalf("verification of a crafted collision: %v", err)
+	}
+}
+
+// A canceled build stops at the next page instead of scanning the file.
+func TestLogIndexBuildHonoursCancellation(t *testing.T) {
+	dir := t.TempDir()
+	rows := randomTraceLogs(newRand(3), 1_000)
+	logs := writeTestLogs(t, dir, rows)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	path := filepath.Join(dir, "logs.fidx")
+	if err := buildLogIndex(ctx, logs, path, len(rows), logIndexPassRows); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled build: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("canceled build left its index: %v", err)
+	}
+}
+
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
+
+// Short index content is corrupt; a failing read is operational and must not
+// authorize quarantine.
+func TestIndexReadErrorsKeepOperationalFailures(t *testing.T) {
+	buf := make([]byte, 16)
+	if err := readIndexBytes(bytes.NewReader(buf[:5]), buf, "log index entry"); err == nil || !IsBatchCorrupt(batchDataError(err)) {
+		t.Fatalf("short index read: %v", err)
+	}
+	if err := readIndexBytes(bytes.NewReader(nil), buf, "log index header"); err == nil || !IsBatchCorrupt(batchDataError(err)) {
+		t.Fatalf("empty index read: %v", err)
+	}
+	eio := &os.PathError{Op: "read", Path: "logs.fidx", Err: syscall.EIO}
+	err := readIndexBytes(failingReader{eio}, buf, "log index header")
+	if !errors.Is(err, syscall.EIO) || IsBatchCorrupt(batchDataError(err)) {
+		t.Fatalf("failing index read: %v", err)
+	}
+	if err := readIndexBytes(bufio.NewReader(failingReader{eio}), buf, "log index entry"); IsBatchCorrupt(batchDataError(err)) {
+		t.Fatalf("buffered failing index read: %v", err)
 	}
 }

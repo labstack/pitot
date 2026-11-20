@@ -157,6 +157,17 @@ func writeTraceIndex(path string, hashes []uint64) error {
 	return writer.Close()
 }
 
+// readIndexBytes fills buf from an index sidecar. Content that ends early is a
+// format error. Any other read failure is returned unchanged, so a failing
+// device or descriptor stays an operational error and never reads as corrupt.
+func readIndexBytes(r io.Reader, buf []byte, what string) error {
+	_, err := io.ReadFull(r, buf)
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("truncated %s", what)
+	}
+	return err
+}
+
 func loadTraceIndex(path string, spanCount int) (index traceIndex, err error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -171,7 +182,10 @@ func loadTraceIndex(path string, spanCount int) (index traceIndex, err error) {
 		return traceIndex{}, errors.New("trace index is not a regular file")
 	}
 	var header [traceIndexHeaderSize]byte
-	if _, err := io.ReadFull(file, header[:]); err != nil || string(header[:8]) != traceIndexMagic {
+	if err := readIndexBytes(file, header[:], "trace index header"); err != nil {
+		return traceIndex{}, err
+	}
+	if string(header[:8]) != traceIndexMagic {
 		return traceIndex{}, errors.New("invalid trace index header")
 	}
 	count := binary.LittleEndian.Uint64(header[8:])
@@ -184,7 +198,7 @@ func loadTraceIndex(path string, spanCount int) (index traceIndex, err error) {
 	var previous traceRange
 	fences := make([]uint64, 0, (count+indexBlockEntries-1)/indexBlockEntries)
 	for i := uint64(0); i < count; i++ {
-		if _, err := io.ReadFull(reader, encoded[:]); err != nil {
+		if err := readIndexBytes(reader, encoded[:], "trace index entry"); err != nil {
 			return traceIndex{}, err
 		}
 		entry := decodeTraceRange(encoded[:])

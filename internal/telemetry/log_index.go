@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -55,11 +56,11 @@ type logIndex struct {
 }
 
 // writeLogIndex builds path from the logs file just written at logsPath.
-func writeLogIndex(logsPath, path string, rows int) error {
-	return buildLogIndex(logsPath, path, rows, logIndexPassRows)
+func writeLogIndex(ctx context.Context, logsPath, path string, rows int) error {
+	return buildLogIndex(ctx, logsPath, path, rows, logIndexPassRows)
 }
 
-func buildLogIndex(logsPath, path string, rows, passRows int) (err error) {
+func buildLogIndex(ctx context.Context, logsPath, path string, rows, passRows int) (err error) {
 	if uint64(rows) > math.MaxUint32 {
 		return fmt.Errorf("logs file has %d rows; the log index addresses at most %d", rows, uint64(math.MaxUint32))
 	}
@@ -72,7 +73,7 @@ func buildLogIndex(logsPath, path string, rows, passRows int) (err error) {
 			writer.Abort()
 		}
 	}()
-	if err := logIndexPasses(logsPath, rows, passRows, writer.Pass); err != nil {
+	if err := logIndexPasses(ctx, logsPath, rows, passRows, writer.Pass); err != nil {
 		return err
 	}
 	return writer.Close()
@@ -85,10 +86,10 @@ func buildLogIndex(logsPath, path string, rows, passRows int) (err error) {
 // whole buckets up to passRows pairs. One bucket can still exceed passRows
 // only when many rows share few trace IDs; the pairs of a pass never exceed
 // the file's rows, which compaction caps at CompactionMaxRows.
-func logIndexPasses(path string, rows, passRows int, visit func([]logPosting) error) error {
+func logIndexPasses(ctx context.Context, path string, rows, passRows int, visit func([]logPosting) error) error {
 	if rows <= passRows {
 		pairs := make([]logPosting, 0, rows)
-		if err := scanLogTraceHashes(path, rows, func(row uint32, hash uint64) {
+		if err := scanLogTraceHashes(ctx, path, rows, func(row uint32, hash uint64) {
 			pairs = append(pairs, logPosting{hash, row})
 		}); err != nil {
 			return err
@@ -97,7 +98,7 @@ func logIndexPasses(path string, rows, passRows int, visit func([]logPosting) er
 		return visit(pairs)
 	}
 	counts := make([]uint32, logIndexBuckets)
-	if err := scanLogTraceHashes(path, rows, func(_ uint32, hash uint64) { counts[hash>>48]++ }); err != nil {
+	if err := scanLogTraceHashes(ctx, path, rows, func(_ uint32, hash uint64) { counts[hash>>48]++ }); err != nil {
 		return err
 	}
 	var pairs []logPosting
@@ -110,7 +111,7 @@ func logIndexPasses(path string, rows, passRows int, visit func([]logPosting) er
 		if total > 0 {
 			pairs = slices.Grow(pairs[:0], total)
 			first, last := uint64(low), uint64(high)
-			if err := scanLogTraceHashes(path, rows, func(row uint32, hash uint64) {
+			if err := scanLogTraceHashes(ctx, path, rows, func(row uint32, hash uint64) {
 				if bucket := hash >> 48; bucket >= first && bucket < last {
 					pairs = append(pairs, logPosting{hash, row})
 				}
@@ -141,8 +142,9 @@ func sortLogPostings(pairs []logPosting) {
 
 // scanLogTraceHashes decodes the trace ID column chunk by chunk, without
 // assembling rows, and visits the hash of every nonempty value with its row
-// number.
-func scanLogTraceHashes(path string, expected int, visit func(uint32, uint64)) (err error) {
+// number. It checks ctx before every page, so a preempted build stops
+// promptly.
+func scanLogTraceHashes(ctx context.Context, path string, expected int, visit func(uint32, uint64)) (err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -170,6 +172,9 @@ func scanLogTraceHashes(path string, expected int, visit func(uint32, uint64)) (
 		read := uint64(0)
 		pages := group.ColumnChunks()[leaf.ColumnIndex].Pages()
 		for {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(err, pages.Close())
+			}
 			page, pageErr := pages.ReadPage()
 			if errors.Is(pageErr, io.EOF) {
 				break
@@ -394,7 +399,10 @@ func loadLogIndex(path string, rows int) (index logIndex, err error) {
 		return logIndex{}, errors.New("log index is not a regular file")
 	}
 	var header [logIndexHeaderSize]byte
-	if _, err := io.ReadFull(file, header[:]); err != nil || string(header[:8]) != logIndexMagic {
+	if err := readIndexBytes(file, header[:], "log index header"); err != nil {
+		return logIndex{}, err
+	}
+	if string(header[:8]) != logIndexMagic {
 		return logIndex{}, errors.New("invalid log index header")
 	}
 	entries := binary.LittleEndian.Uint64(header[8:16])
@@ -409,7 +417,7 @@ func loadLogIndex(path string, rows int) (index logIndex, err error) {
 	var previous logRange
 	var covered uint64
 	for i := uint64(0); i < entries; i++ {
-		if _, err := io.ReadFull(reader, encoded[:]); err != nil {
+		if err := readIndexBytes(reader, encoded[:], "log index entry"); err != nil {
 			return logIndex{}, err
 		}
 		entry := decodeLogRange(encoded[:])
@@ -477,7 +485,7 @@ func decodeLogRange(encoded []byte) logRange {
 // verifyLogIndex rebuilds the index from the logs file and compares it,
 // entry by entry and posting by posting, with the sidecar. Together with the
 // length checked at load this compares every byte without a second copy.
-func verifyLogIndex(logsPath string, rows int, index logIndex) (err error) {
+func verifyLogIndex(ctx context.Context, logsPath string, rows int, index logIndex) (err error) {
 	file, err := os.Open(index.path)
 	if err != nil {
 		return err
@@ -488,7 +496,7 @@ func verifyLogIndex(logsPath string, rows int, index logIndex) (err error) {
 	postings := bufio.NewReaderSize(io.NewSectionReader(file, postingsStart, int64(index.postings)*logIndexRowSize), 64<<10)
 	var entry, posting uint64
 	var encoded [logIndexEntrySize]byte
-	err = logIndexPasses(logsPath, rows, logIndexPassRows, func(pairs []logPosting) error {
+	err = logIndexPasses(ctx, logsPath, rows, logIndexPassRows, func(pairs []logPosting) error {
 		for start := 0; start < len(pairs); {
 			end := start + 1
 			for end < len(pairs) && pairs[end].hash == pairs[start].hash {
