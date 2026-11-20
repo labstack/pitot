@@ -6,11 +6,9 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 
-	"github.com/parquet-go/parquet-go"
 	"github.com/zeebo/xxh3"
 )
 
@@ -50,10 +48,10 @@ func (p *ParquetStore) TraceLogs(ctx context.Context, query TraceQuery) ([]Trace
 	if err := query.validate(); err != nil {
 		return nil, err
 	}
-	return traceLogs(ctx, p.catalog(), query)
+	return traceLogs(ctx, &p.footers, p.catalog(), query)
 }
 
-func traceLogs(ctx context.Context, batches []*storedBatch, query TraceQuery) ([]TraceLog, error) {
+func traceLogs(ctx context.Context, footers *footerCache, batches []*storedBatch, query TraceQuery) ([]TraceLog, error) {
 	hash := xxh3.HashString(query.TraceID)
 	selected := make(traceLogHeap, 0, query.Limit)
 	for _, batch := range batches {
@@ -74,7 +72,7 @@ func traceLogs(ctx context.Context, batches []*storedBatch, query TraceQuery) ([
 		if len(rows) == 0 {
 			continue
 		}
-		if err := readTraceLogs(ctx, batch, rows, query, &selected); err != nil {
+		if err := readTraceLogs(ctx, footers, batch, rows, query, &selected); err != nil {
 			return nil, err
 		}
 	}
@@ -85,13 +83,12 @@ func traceLogs(ctx context.Context, batches []*storedBatch, query TraceQuery) ([
 
 // readTraceLogs seeks to each run of consecutive posted rows; the reader
 // decodes only the projected columns' pages that hold them.
-func readTraceLogs(ctx context.Context, batch *storedBatch, rows []uint32, query TraceQuery, selected *traceLogHeap) (err error) {
-	file, err := os.Open(filepath.Join(batch.dir, "logs.parquet"))
+func readTraceLogs(ctx context.Context, footers *footerCache, batch *storedBatch, rows []uint32, query TraceQuery, selected *traceLogHeap) (err error) {
+	reader, closeReader, err := openCachedReader[traceLogRow](footers, filepath.Join(batch.dir, "logs.parquet"))
 	if err != nil {
 		return err
 	}
-	reader := parquet.NewGenericReader[traceLogRow](file)
-	defer func() { err = errors.Join(err, reader.Close(), file.Close()) }()
+	defer func() { err = errors.Join(err, closeReader()) }()
 	buffer := make([]traceLogRow, min(len(rows), 256))
 	for start := 0; start < len(rows); {
 		if err := ctx.Err(); err != nil {

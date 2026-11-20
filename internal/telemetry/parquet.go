@@ -155,6 +155,9 @@ type ParquetStore struct {
 	pinned      map[uint64]int
 	retiring    []retirement
 	retiringIDs map[string]BatchMetadata
+
+	// footers keeps trace reads from reparsing large compacted footers.
+	footers footerCache
 }
 
 type ParquetStats struct {
@@ -486,7 +489,7 @@ func (p *ParquetStore) Trace(ctx context.Context, query TraceQuery) ([]IndexedSp
 	if err := query.validate(); err != nil {
 		return nil, TraceTotals{}, err
 	}
-	return traceSpans(ctx, p.catalog(), query)
+	return traceSpans(ctx, &p.footers, p.catalog(), query)
 }
 
 // TraceDetail reads a trace's spans and logs from one capture of the catalog,
@@ -500,11 +503,11 @@ func (p *ParquetStore) TraceDetail(ctx context.Context, query TraceQuery) (Trace
 		return TraceDetail{}, err
 	}
 	batches := p.catalog()
-	spans, totals, err := traceSpans(ctx, batches, query)
+	spans, totals, err := traceSpans(ctx, &p.footers, batches, query)
 	if err != nil {
 		return TraceDetail{}, err
 	}
-	logs, err := traceLogs(ctx, batches, query)
+	logs, err := traceLogs(ctx, &p.footers, batches, query)
 	if err != nil {
 		return TraceDetail{}, err
 	}
@@ -551,7 +554,7 @@ func (p *ParquetStore) catalog() []*storedBatch {
 	return batches
 }
 
-func traceSpans(ctx context.Context, batches []*storedBatch, query TraceQuery) ([]IndexedSpan, TraceTotals, error) {
+func traceSpans(ctx context.Context, footers *footerCache, batches []*storedBatch, query TraceQuery) ([]IndexedSpan, TraceTotals, error) {
 	var totals TraceTotals
 	services := make(map[string]struct{}, 8)
 	hash := xxh3.HashString(query.TraceID)
@@ -571,7 +574,7 @@ func traceSpans(ctx context.Context, batches []*storedBatch, query TraceQuery) (
 		if !found {
 			continue
 		}
-		if err := readIndexedTrace(ctx, batch, match, query, &selected, &totals, services); err != nil {
+		if err := readIndexedTrace(ctx, footers, batch, match, query, &selected, &totals, services); err != nil {
 			return nil, totals, err
 		}
 	}
@@ -609,13 +612,12 @@ func (r indexedSpanRow) span() IndexedSpan {
 	}
 }
 
-func readIndexedTrace(ctx context.Context, batch *storedBatch, match traceRange, query TraceQuery, selected *indexedSpanHeap, totals *TraceTotals, services map[string]struct{}) (err error) {
-	file, err := os.Open(filepath.Join(batch.dir, "spans.parquet"))
+func readIndexedTrace(ctx context.Context, footers *footerCache, batch *storedBatch, match traceRange, query TraceQuery, selected *indexedSpanHeap, totals *TraceTotals, services map[string]struct{}) (err error) {
+	reader, closeReader, err := openCachedReader[indexedSpanRow](footers, filepath.Join(batch.dir, "spans.parquet"))
 	if err != nil {
 		return err
 	}
-	reader := parquet.NewGenericReader[indexedSpanRow](file)
-	defer func() { err = errors.Join(err, reader.Close(), file.Close()) }()
+	defer func() { err = errors.Join(err, closeReader()) }()
 	return readIndexedRange(ctx, reader, match, query.EndNanos, func(row indexedSpanRow) {
 		if !query.matches(row.TraceID, row.Namespace, row.StartUnixNano) {
 			return
@@ -712,7 +714,7 @@ func (p *ParquetStore) TraceSummaries(ctx context.Context, ids []TraceIdentity, 
 		if bounds := batch.metadata.SpanTime; bounds.Known && (bounds.MaxNanos < start || bounds.MinNanos >= end) {
 			continue
 		}
-		if err := readBatchTraceSummaries(ctx, batch, hashes, end, func(row indexedSpanRow) {
+		if err := readBatchTraceSummaries(ctx, &p.footers, batch, hashes, end, func(row indexedSpanRow) {
 			if row.StartUnixNano < start || row.StartUnixNano >= end {
 				return
 			}
@@ -732,7 +734,7 @@ func (p *ParquetStore) TraceSummaries(ctx context.Context, ids []TraceIdentity, 
 	return totals, nil
 }
 
-func readBatchTraceSummaries(ctx context.Context, batch *storedBatch, hashes []uint64, end int64, visit func(indexedSpanRow)) (err error) {
+func readBatchTraceSummaries(ctx context.Context, footers *footerCache, batch *storedBatch, hashes []uint64, end int64, visit func(indexedSpanRow)) (err error) {
 	if len(hashes) == 0 || batch.traces.entries == 0 {
 		return nil
 	}
@@ -754,12 +756,11 @@ func readBatchTraceSummaries(ctx context.Context, batch *storedBatch, hashes []u
 	if len(matches) == 0 {
 		return nil
 	}
-	file, err := os.Open(filepath.Join(batch.dir, "spans.parquet"))
+	reader, closeReader, err := openCachedReader[indexedSpanRow](footers, filepath.Join(batch.dir, "spans.parquet"))
 	if err != nil {
 		return err
 	}
-	reader := parquet.NewGenericReader[indexedSpanRow](file)
-	defer func() { err = errors.Join(err, reader.Close(), file.Close()) }()
+	defer func() { err = errors.Join(err, closeReader()) }()
 	for _, match := range matches {
 		if err := readIndexedRange(ctx, reader, match, end, visit); err != nil {
 			return err

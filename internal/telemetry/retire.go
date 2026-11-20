@@ -103,8 +103,11 @@ func (p *ParquetStore) retireLocked(batches []BatchMetadata) {
 
 func (p *ParquetStore) retire(batches []BatchMetadata) {
 	p.pinMu.Lock()
-	defer p.pinMu.Unlock()
 	p.retireLocked(batches)
+	p.pinMu.Unlock()
+	for _, b := range batches {
+		p.footers.drop(p.BatchPath(b.ID))
+	}
 }
 
 // retiredMetadata returns a retired batch that has not been deleted yet.
@@ -260,6 +263,8 @@ func hasPruned(dir string) (bool, error) {
 
 func (p *ParquetStore) removeRetiredBatch(id string) error {
 	active := p.BatchPath(id)
+	// A reader pinned before the retirement may have cached the files again.
+	p.footers.drop(active)
 	// Retired directories reuse retention's suffix: startup cleanup reclaims a
 	// removal that was interrupted after the rename.
 	retired := filepath.Join(p.batchesDir, id+".retired")
