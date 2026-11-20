@@ -16,6 +16,9 @@ import (
 // as much to parse as the rows a trace read decodes from it.
 const footerCacheBytes = 64 << 20
 
+// footerCacheFiles bounds the descriptors the cache holds open.
+const footerCacheFiles = 512
+
 // footerCache keeps the parsed footers and page indexes of recently read span
 // and log files open for trace reads. Batch files are immutable and their
 // paths unique, so an entry is never stale; one is dropped when its batch is
@@ -82,7 +85,7 @@ func (c *footerCache) open(path string) (*parquet.File, func() error, error) {
 	if limit == 0 {
 		limit = footerCacheBytes
 	}
-	for c.bytes > limit && c.recent.Len() > 1 {
+	for (c.bytes > limit || c.recent.Len() > footerCacheFiles) && c.recent.Len() > 1 {
 		c.removeLocked(c.recent.Back().Value.(*cachedFooter))
 	}
 	return parsed, func() error { return c.release(entry) }, nil
