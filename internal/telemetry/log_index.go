@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/parquet-go/parquet-go"
@@ -58,6 +59,12 @@ type logIndex struct {
 // writeLogIndex builds path from the logs file just written at logsPath.
 func writeLogIndex(ctx context.Context, logsPath, path string, rows int) error {
 	return buildLogIndex(ctx, logsPath, path, rows, logIndexPassRows)
+}
+
+// WriteLogIndex writes dir's logs.fidx from its logs.parquet of rows rows,
+// for tools that assemble batch directories outside the store.
+func WriteLogIndex(ctx context.Context, dir string, rows int) error {
+	return writeLogIndex(ctx, filepath.Join(dir, "logs.parquet"), filepath.Join(dir, "logs.fidx"), rows)
 }
 
 func buildLogIndex(ctx context.Context, logsPath, path string, rows, passRows int) (err error) {

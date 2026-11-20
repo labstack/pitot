@@ -387,7 +387,7 @@ func preparePanelReplay(tb testing.TB, input string, volume int) panelBenchData 
 					}
 				}
 				if next.Logs > 0 {
-					if err := panelLogIndex(dst); err != nil {
+					if err := telemetry.WriteLogIndex(tb.Context(), dst, next.Logs); err != nil {
 						tb.Fatal(err)
 					}
 				}
@@ -711,69 +711,6 @@ func panelTraceIndex(dir string) (err error) {
 	binary.LittleEndian.PutUint64(header[8:], entries)
 	_, err = out.WriteAt(header[:], 0)
 	return err
-}
-
-// The format-6 logs.fidx contract: entries of (hash, posting offset, count)
-// sorted by the hash of each nonempty trace ID, then the rows, ascending
-// within an entry.
-func panelLogIndex(dir string) (err error) {
-	in, err := os.Open(filepath.Join(dir, "logs.parquet"))
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, in.Close()) }()
-	reader := parquet.NewGenericReader[struct {
-		TraceID string `parquet:"trace_id"`
-	}](in)
-	defer func() { err = errors.Join(err, reader.Close()) }()
-	type posting struct {
-		hash uint64
-		row  uint32
-	}
-	var postings []posting
-	buffer := make([]struct {
-		TraceID string `parquet:"trace_id"`
-	}, 8192)
-	var rowNumber uint32
-	for {
-		n, readErr := reader.Read(buffer)
-		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			return readErr
-		}
-		for _, r := range buffer[:n] {
-			if r.TraceID != "" {
-				postings = append(postings, posting{xxh3.HashString(r.TraceID), rowNumber})
-			}
-			rowNumber++
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-	}
-	sort.Slice(postings, func(i, j int) bool {
-		if postings[i].hash != postings[j].hash {
-			return postings[i].hash < postings[j].hash
-		}
-		return postings[i].row < postings[j].row
-	})
-	var entries, rows []byte
-	for i := 0; i < len(postings); {
-		j := i + 1
-		for j < len(postings) && postings[j].hash == postings[i].hash {
-			j++
-		}
-		entries = binary.LittleEndian.AppendUint64(entries, postings[i].hash)
-		entries = binary.LittleEndian.AppendUint32(entries, uint32(i))
-		entries = binary.LittleEndian.AppendUint32(entries, uint32(j-i))
-		for _, p := range postings[i:j] {
-			rows = binary.LittleEndian.AppendUint32(rows, p.row)
-		}
-		i = j
-	}
-	header := append([]byte("PITLIDX1"), make([]byte, 16)...)
-	binary.LittleEndian.PutUint64(header[8:], uint64(len(entries)/16))
-	binary.LittleEndian.PutUint64(header[16:], uint64(len(postings)))
-	return os.WriteFile(filepath.Join(dir, "logs.fidx"), append(append(header, entries...), rows...), 0o644)
 }
 
 // The executor selects analytical rollups for eligible panels. Populate those
