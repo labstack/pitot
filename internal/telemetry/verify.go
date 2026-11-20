@@ -103,6 +103,11 @@ func (v *BatchVerifier) Validate(ctx context.Context, dir string) error {
 				return batchDataError(err)
 			}
 		}
+		if signal == Logs {
+			if err := verifyLogIndex(path, count, batch.logs); err != nil {
+				return batchDataError(err)
+			}
+		}
 	}
 	return nil
 }

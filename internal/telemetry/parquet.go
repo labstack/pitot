@@ -112,6 +112,19 @@ type storedBatch struct {
 	metadata BatchMetadata
 	dir      string
 	traces   traceIndex
+	logs     logIndex
+}
+
+// publishAt moves a validated batch's sidecar paths to the directory it is
+// renamed to.
+func (b *storedBatch) publishAt(dir string) {
+	b.dir = dir
+	if b.metadata.Spans > 0 {
+		b.traces.path = filepath.Join(dir, "trace.fidx")
+	}
+	if b.metadata.Logs > 0 {
+		b.logs.path = filepath.Join(dir, "logs.fidx")
+	}
 }
 
 type ParquetStore struct {
@@ -208,15 +221,30 @@ type ParquetMergeStats struct {
 // MergeParquet rewrites immutable files into one native Parquet output. Span
 // rows retain the index order required by trace.fidx and build that sidecar as
 // they are copied; the other signals keep their input order. Re-encoding also
-// consolidates tiny ingest row groups.
+// consolidates tiny ingest row groups. A logs output gets logs.fidx, derived
+// from the merged file as a commit's is rather than remapped from the inputs'
+// postings.
 func (p *ParquetStore) MergeParquet(ctx context.Context, signal string, inputs []string, output string) (ParquetMergeStats, error) {
 	var stats ParquetMergeStats
 	s, ok := LookupSignal(signal)
 	if !ok {
 		return stats, fmt.Errorf("unsupported Parquet signal %q", signal)
 	}
-	err := mergeParquet(ctx, s, inputs, output, &stats)
-	return stats, err
+	if err := mergeParquet(ctx, s, inputs, output, &stats); err != nil {
+		return stats, err
+	}
+	if s == Logs {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
+		if stats.Rows > math.MaxUint32 {
+			return stats, fmt.Errorf("compacted logs file has %d rows; the log index addresses at most %d", stats.Rows, uint64(math.MaxUint32))
+		}
+		if err := writeLogIndex(output, filepath.Join(filepath.Dir(output), "logs.fidx"), int(stats.Rows)); err != nil {
+			return stats, fmt.Errorf("write log index: %w", err)
+		}
+	}
+	return stats, nil
 }
 
 // BatchMetadata returns the installed batches in canonical order: generation,
@@ -361,10 +389,7 @@ func (p *ParquetStore) CommitBatch(ctx context.Context, metadata *BatchMetadata,
 	if prepared.metadata.ID != metadata.ID {
 		return fmt.Errorf("staged Parquet metadata ID %q does not match batch ID %q", prepared.metadata.ID, metadata.ID)
 	}
-	prepared.dir = final
-	if prepared.metadata.Spans > 0 {
-		prepared.traces.path = filepath.Join(final, "trace.fidx")
-	}
+	prepared.publishAt(final)
 
 	if err := p.lockCommitPublish(ctx); err != nil {
 		return err
@@ -877,10 +902,7 @@ func (p *ParquetStore) PublishReplacement(stage string, metadata BatchMetadata, 
 	if err != nil {
 		return err
 	}
-	replacement.dir = final
-	if replacement.metadata.Spans > 0 {
-		replacement.traces.path = filepath.Join(final, "trace.fidx")
-	}
+	replacement.publishAt(final)
 	return publish(func(ctx context.Context) error {
 		if err := p.lockPublish(ctx); err != nil {
 			return err
@@ -1226,14 +1248,24 @@ func loadStoredBatch(dir string) (*storedBatch, error) {
 		}
 		*fields.time = parquetTimeRange(parquetFile, signal.Time)
 	}
-	var traces traceIndex
+	batch := &storedBatch{metadata: metadata, dir: dir}
 	if metadata.Spans > 0 {
-		traces, err = loadTraceIndex(filepath.Join(dir, "trace.fidx"), metadata.Spans)
-		if err != nil {
+		if batch.traces, err = loadTraceIndex(filepath.Join(dir, "trace.fidx"), metadata.Spans); err != nil {
 			return nil, err
 		}
 	}
-	return &storedBatch{metadata: metadata, dir: dir, traces: traces}, nil
+	logIndexPath := filepath.Join(dir, "logs.fidx")
+	if metadata.Logs > 0 {
+		if batch.logs, err = loadLogIndex(logIndexPath, metadata.Logs); err != nil {
+			return nil, err
+		}
+	} else if _, err := os.Lstat(logIndexPath); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("log index exists but metadata declares zero log rows")
+	}
+	return batch, nil
 }
 
 // checkColumnPaths requires every column chunk to name its schema leaf.
@@ -1330,7 +1362,8 @@ func (s *Signal) writerOptions() []parquet.WriterOption {
 
 // commitSignal writes one signal of a staged batch in the signal's order,
 // with its trace index when the signal has one. The index needs only the
-// sorted hashes, so it is written while the Parquet file is.
+// sorted hashes, so it is written while the Parquet file is. A logs file gets
+// its log index, derived from the file once it is written.
 func commitSignal[R any](stage string, s *Signal, rows []R) error {
 	perm, keys := sortRows(s, rows)
 	var index errgroup.Group
@@ -1346,9 +1379,14 @@ func commitSignal[R any](stage string, s *Signal, rows []R) error {
 			return nil
 		})
 	}
-	err := writeOrdered(filepath.Join(stage, s.Name+".parquet"), s, rows, perm, parquetPageSize)
+	path := filepath.Join(stage, s.Name+".parquet")
+	err := writeOrdered(path, s, rows, perm, parquetPageSize)
 	if err != nil {
 		err = fmt.Errorf("write %s Parquet: %w", s.Name, err)
+	} else if s == Logs {
+		if err = writeLogIndex(path, filepath.Join(stage, "logs.fidx"), len(rows)); err != nil {
+			err = fmt.Errorf("write log index: %w", err)
+		}
 	}
 	return errors.Join(err, index.Wait())
 }
