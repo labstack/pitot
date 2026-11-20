@@ -16,8 +16,9 @@ import (
 	telemetrystore "github.com/labstack/pitot/internal/telemetry/store"
 )
 
-// Time trace detail over a window holding many log rows, split into the
-// indexed span read and the trace's log lookup. PITOT_TRACE_BENCH_BATCHES sets
+// Time trace detail over a window holding many log rows: the service read,
+// the indexed span read alone, and the repository's spans-and-logs read the
+// service makes. PITOT_TRACE_BENCH_BATCHES sets
 // the committed batches of 100,000 spans and 100,000 logs, each log carrying
 // its own trace's ID as an instrumented service would.
 func TestTraceDetailLogsBenchmark(t *testing.T) {
@@ -78,7 +79,7 @@ func TestTraceDetailLogsBenchmark(t *testing.T) {
 		ids = append(ids, telemetry.TraceIdentity{Namespace: "prod", TraceID: fmt.Sprintf("%016x%016x", (b*rows+i+1)*uint64(0x9e3779b97f4a7c15), (i+1)*uint64(0xbf58476d1ce4e5b9))})
 	}
 	const samples = 7
-	var total, spans, logs, summaries []float64
+	var total, spans, detail, summaries []float64
 	for range samples {
 		started := time.Now()
 		got, err := svc.Trace(t.Context(), scope, trace, "", 100)
@@ -95,10 +96,10 @@ func TestTraceDetailLogsBenchmark(t *testing.T) {
 		}
 		spans = append(spans, ms(time.Since(started)))
 		started = time.Now()
-		if got, err := d.TraceLogs(t.Context(), telemetry.TraceQuery{TraceID: trace, Namespace: "prod", StartNanos: scope.Start.UnixNano(), EndNanos: scope.End.UnixNano(), Limit: 100}); err != nil || len(got) != 2 {
-			t.Fatalf("logs=%d err=%v", len(got), err)
+		if got, err := d.TraceDetail(t.Context(), telemetry.TraceQuery{TraceID: trace, Namespace: "prod", StartNanos: scope.Start.UnixNano(), EndNanos: scope.End.UnixNano(), Limit: 100}); err != nil || len(got.Spans) != 2 || len(got.Logs) != 2 {
+			t.Fatalf("spans=%d logs=%d err=%v", len(got.Spans), len(got.Logs), err)
 		}
-		logs = append(logs, ms(time.Since(started)))
+		detail = append(detail, ms(time.Since(started)))
 		started = time.Now()
 		totals, err := d.TraceSummaries(t.Context(), ids, scope.Start.UnixNano(), scope.End.UnixNano())
 		if err != nil {
@@ -111,7 +112,7 @@ func TestTraceDetailLogsBenchmark(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("log_rows=%d trace_ms=%.1f spans_ms=%.1f logs_ms=%.1f summaries_ms=%.1f", batches*rows, median(total), median(spans), median(logs), median(summaries))
+	t.Logf("log_rows=%d trace_ms=%.1f spans_ms=%.1f detail_ms=%.1f summaries_ms=%.1f", batches*rows, median(total), median(spans), median(detail), median(summaries))
 }
 
 func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
