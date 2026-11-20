@@ -98,8 +98,11 @@
   Analytical service/edge watermark lag is separate. Completed-batch writes
   have their own gate and write-pool slot; analytical writes use disjoint tables.
   Maintenance must hold both gates for checkpointing.
-- Batch format 5, including its physical schema, is the only accepted telemetry
-  format. Schema changes require a format version change. Ingest copies standard
+- Batch format 6, including its physical schema and sidecars, is the only
+  accepted telemetry format. Schema or sidecar changes require a format version
+  change. Each logs file has `logs.fidx`, a pure function of the file that
+  commit, compaction and verification derive with one function; trace-detail
+  logs are read through it in Go, under the spans' pinned catalog capture. Ingest copies standard
   semconv keys into typed dedicated columns, converting values of another type
   by fixed rules; a value with no conversion leaves the column NULL and is
   counted as a spill. The map keeps every value as sent, and the column is the

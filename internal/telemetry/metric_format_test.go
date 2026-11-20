@@ -29,8 +29,8 @@ func TestMetricPhysicalRowKeepsFidelityColumns(t *testing.T) {
 	if err := ValidatePublishedBatch(store.BatchPath("fidelity")); err != nil {
 		t.Fatal(err)
 	}
-	if store.BatchMetadata()[0].Version != 5 {
-		t.Fatal("metadata is not format 5")
+	if store.BatchMetadata()[0].Version != batchMetadataVersion {
+		t.Fatal("metadata is not the current format")
 	}
 }
 
@@ -162,7 +162,7 @@ func TestFormatFiveRequiresMetricPhysicalSchema(t *testing.T) {
 
 func TestPartiallyRemovedRetiredBatchDoesNotStopOpen(t *testing.T) {
 	for _, suffix := range []string{".retired"} {
-		for _, missing := range []string{"spans.parquet", "logs.parquet", "metrics.parquet", "trace.fidx", "metadata.json"} {
+		for _, missing := range []string{"spans.parquet", "logs.parquet", "metrics.parquet", "trace.fidx", "logs.fidx", "metadata.json"} {
 			t.Run(suffix+"/"+missing, func(t *testing.T) {
 				root := t.TempDir()
 				store, err := OpenParquetStore(root)

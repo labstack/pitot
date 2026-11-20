@@ -30,7 +30,7 @@ const (
 	SchemaBatch = "_schema" + BatchSuffix
 	// scripts/release-notes.sh reads this declaration to mark format-changing
 	// releases; keep it a single integer literal.
-	batchMetadataVersion = 5
+	batchMetadataVersion = 6
 	parquetPageSize      = 64 << 10
 	// A column whose distinct values outgrow this switches to plain pages for
 	// the rest of its row group, so client-supplied text cannot grow a
@@ -64,7 +64,7 @@ type BatchMetadata struct {
 	// Zero means not measured.
 	Bytes int64 `json:"-"`
 	// Event times come from fixed-schema Parquet footer statistics, not ingest
-	// timestamps. They are derived on publication/load and never change format 5.
+	// timestamps. They are derived on publication/load and never change the persisted format.
 	SpanTime   TimeRange `json:"-"`
 	LogTime    TimeRange `json:"-"`
 	MetricTime TimeRange `json:"-"`

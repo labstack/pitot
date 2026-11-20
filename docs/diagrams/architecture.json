@@ -356,7 +356,7 @@
       "id": "parquet",
       "type": "database",
       "label": "Parquet batches",
-      "sublabel": "authoritative, trace.fidx",
+      "sublabel": "authoritative, trace and log indexes",
       "pos": [
         40,
         600

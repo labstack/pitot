@@ -27,7 +27,7 @@ func TestParquetStorePublishesCompleteBatchAndRecovers(t *testing.T) {
 	}
 
 	batchDir := store.BatchPath(metadata.ID)
-	for _, name := range []string{"spans.parquet", "logs.parquet", "metrics.parquet", "trace.fidx", "metadata.json"} {
+	for _, name := range []string{"spans.parquet", "logs.parquet", "metrics.parquet", "trace.fidx", "logs.fidx", "metadata.json"} {
 		if _, err := os.Stat(filepath.Join(batchDir, name)); err != nil {
 			t.Fatalf("published batch is missing %s: %v", name, err)
 		}

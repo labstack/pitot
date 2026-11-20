@@ -127,14 +127,19 @@
       "id": "trace",
       "type": "backend",
       "label": "Indexed trace read",
-      "sublabel": "trace.fidx lookup",
+      "sublabel": "trace.fidx and logs.fidx lookup",
       "stage": 3,
       "row": 0,
       "sources": [
         {
           "path": "internal/telemetry/trace_index.go",
-          "line": 203,
-          "end_line": 235
+          "line": 215,
+          "end_line": 238
+        },
+        {
+          "path": "internal/telemetry/log_index.go",
+          "line": 399,
+          "end_line": 433
         }
       ]
     },
