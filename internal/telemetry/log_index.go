@@ -54,11 +54,6 @@ type logIndex struct {
 	fences   []uint64
 }
 
-// logTraceRow reads only the trace ID column of a logs file.
-type logTraceRow struct {
-	TraceID string `parquet:"trace_id"`
-}
-
 // writeLogIndex builds path from the logs file just written at logsPath.
 func writeLogIndex(logsPath, path string, rows int) error {
 	return buildLogIndex(logsPath, path, rows, logIndexPassRows)
@@ -144,39 +139,78 @@ func sortLogPostings(pairs []logPosting) {
 	})
 }
 
-// scanLogTraceHashes decodes the trace ID column and visits the hash of every
-// nonempty value with its row number.
+// scanLogTraceHashes decodes the trace ID column chunk by chunk, without
+// assembling rows, and visits the hash of every nonempty value with its row
+// number.
 func scanLogTraceHashes(path string, expected int, visit func(uint32, uint64)) (err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, file.Close()) }()
-	reader := parquet.NewGenericReader[logTraceRow](file)
-	defer func() { err = errors.Join(err, reader.Close()) }()
-	buffer := make([]logTraceRow, 4096)
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	parsed, err := parquet.OpenFile(file, info.Size(), parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true), parquet.ReadBufferSize(1<<20))
+	if err != nil {
+		return err
+	}
+	leaf, ok := parsed.Schema().Lookup("trace_id")
+	if !ok || leaf.MaxRepetitionLevel != 0 || leaf.MaxDefinitionLevel != 0 {
+		return fmt.Errorf("%w: logs trace_id is not a required scalar column", ErrUnsupportedBatchFormat)
+	}
+	values := make([]parquet.Value, 4096)
 	var rows uint64
-	for {
-		n, readErr := reader.Read(buffer)
-		if rows+uint64(n) > uint64(expected) {
+	for _, group := range parsed.RowGroups() {
+		groupRows := uint64(group.NumRows())
+		if rows+groupRows > uint64(expected) {
 			return fmt.Errorf("logs file has more than the %d rows metadata declares", expected)
 		}
-		for i := range buffer[:n] {
-			if id := buffer[i].TraceID; id != "" {
-				visit(uint32(rows), xxh3.HashString(id))
+		read := uint64(0)
+		pages := group.ColumnChunks()[leaf.ColumnIndex].Pages()
+		for {
+			page, pageErr := pages.ReadPage()
+			if errors.Is(pageErr, io.EOF) {
+				break
 			}
-			rows++
+			if pageErr != nil {
+				return errors.Join(pageErr, pages.Close())
+			}
+			reader := page.Values()
+			for {
+				n, readErr := reader.ReadValues(values)
+				if read+uint64(n) > groupRows {
+					parquet.Release(page)
+					return errors.Join(fmt.Errorf("logs trace_id chunk has more values than its %d rows", groupRows), pages.Close())
+				}
+				for _, value := range values[:n] {
+					if id := value.ByteArray(); len(id) > 0 {
+						visit(uint32(rows+read), xxh3.Hash(id))
+					}
+					read++
+				}
+				if errors.Is(readErr, io.EOF) {
+					break
+				}
+				if readErr != nil {
+					parquet.Release(page)
+					return errors.Join(readErr, pages.Close())
+				}
+				if n == 0 {
+					parquet.Release(page)
+					return errors.Join(io.ErrNoProgress, pages.Close())
+				}
+			}
+			parquet.Release(page)
 		}
-		clear(buffer[:n])
-		if errors.Is(readErr, io.EOF) {
-			break
+		if err := pages.Close(); err != nil {
+			return err
 		}
-		if readErr != nil {
-			return readErr
+		if read != groupRows {
+			return fmt.Errorf("logs trace_id chunk has %d values for %d rows", read, groupRows)
 		}
-		if n == 0 {
-			return io.ErrNoProgress
-		}
+		rows += groupRows
 	}
 	if rows != uint64(expected) {
 		return fmt.Errorf("decoded %d log rows; metadata declares %d", rows, expected)
