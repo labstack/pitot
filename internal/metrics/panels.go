@@ -38,6 +38,22 @@ func RecordPanelAdmission(id, status string, seconds float64) {
 	panelAdmissionDuration.WithLabelValues(panelLabel(id), status).Observe(seconds)
 }
 
+var drilldownStageDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "pitot_drilldown_stage_duration_seconds",
+	Help:    "Exemplar drill-down stages: admission wait for every exemplar run, and ranking (query and rows) and root summaries for indexed trace drill-downs. Excludes result-cache hits.",
+	Buckets: []float64{.005, .01, .025, .05, .1, .2, .5, 1, 2, 5, 10},
+}, []string{"stage"})
+
+// RecordDrilldownStage times one stage of an indexed trace drill-down.
+func RecordDrilldownStage(stage string, seconds float64) {
+	switch stage {
+	case "admission", "ranking", "summaries":
+	default:
+		stage = "other"
+	}
+	drilldownStageDuration.WithLabelValues(stage).Observe(seconds)
+}
+
 func panelLabel(id string) string {
 	switch id {
 	case "requests", "errors", "latency_p95", "error_logs", "traffic", "latency", "error_services", "endpoints", "check_states", "check_latency", "service_health", "service_map", "hosts", "containers", "versions":

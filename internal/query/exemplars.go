@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/labstack/pitot/internal/metrics"
 	"github.com/labstack/pitot/internal/queryrows"
 	"github.com/labstack/pitot/internal/telemetry"
 )
@@ -103,9 +105,12 @@ func (e *Executor) Exemplars(ctx context.Context, req ExemplarRequest) (Exemplar
 	}
 	out, _, err := loadCached(e, ctx, key, now, func(run context.Context) (ExemplarResponse, int64, bool, error) {
 		// Leave room for execution and the response inside the 15s client bound.
+		started := time.Now()
 		wait, cancel := context.WithTimeout(run, 2*time.Second)
 		release, err := e.admit(wait)
 		cancel()
+		stages := &drilldownStages{admission: time.Since(started)}
+		metrics.RecordDrilldownStage("admission", stages.admission.Seconds())
 		if err != nil {
 			if run.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 				err = ErrBusy
@@ -113,7 +118,12 @@ func (e *Executor) Exemplars(ctx context.Context, req ExemplarRequest) (Exemplar
 			return ExemplarResponse{Traces: []Exemplar{}}, 0, false, err
 		}
 		defer release()
-		out, err := e.exemplars(run, req, now)
+		out, err := e.exemplars(context.WithValue(run, drilldownStagesKey{}, stages), req, now)
+		if total := time.Since(started); total >= slowDrilldown {
+			slog.Info("slow exemplar request", "panel_id", req.PanelID, "kind", req.Kind, "indexed", stages.indexed,
+				"total_ms", total.Milliseconds(), "admission_ms", stages.admission.Milliseconds(),
+				"ranking_ms", stages.ranking.Milliseconds(), "summaries_ms", stages.summaries.Milliseconds(), "error", err)
+		}
 		size := int64(256+len(out.Traces)*256) + out.Logs.size()
 		return out, size, err == nil, err
 	})
@@ -387,8 +397,27 @@ func (e *Executor) exemplarTraceScope(ctx context.Context, p *Panel, filters []F
 	return w, w.Service != "", empty, nil
 }
 
+// slowDrilldown is the exemplar run time, admission included, that logs its
+// stage breakdown.
+const slowDrilldown = time.Second
+
+// drilldownStages carries one exemplar run's stage times to its slow-request
+// log; the stage histograms are recorded where each stage ends.
+type drilldownStages struct {
+	indexed                       bool
+	admission, ranking, summaries time.Duration
+}
+
+type drilldownStagesKey struct{}
+
 func (e *Executor) indexedExemplars(ctx context.Context, w queryrows.Window, panelStart, panelEnd time.Time) (ExemplarResponse, error) {
 	out := ExemplarResponse{Traces: []Exemplar{}}
+	stages, _ := ctx.Value(drilldownStagesKey{}).(*drilldownStages)
+	if stages == nil {
+		stages = &drilldownStages{}
+	}
+	stages.indexed = true
+	started := time.Now()
 	rows, err := e.engine.QueryContext(queryrows.WithWindow(ctx, w), queryrows.CompletedTraceQuery, w.Start, w.End, w.Namespace, w.Namespace, w.Service, w.Service, 21)
 	if err != nil {
 		return out, exemplarError(ctx, err)
@@ -405,6 +434,8 @@ func (e *Executor) indexedExemplars(ctx context.Context, w queryrows.Window, pan
 	}
 	err = rows.Err()
 	rows.Close()
+	stages.ranking = time.Since(started)
+	metrics.RecordDrilldownStage("ranking", stages.ranking.Seconds())
 	if err != nil {
 		return out, exemplarError(ctx, err)
 	}
@@ -421,7 +452,10 @@ func (e *Executor) indexedExemplars(ctx context.Context, w queryrows.Window, pan
 	if !ok {
 		return out, fmt.Errorf("indexed trace reader unavailable")
 	}
+	started = time.Now()
 	totals, err := reader.TraceSummaries(ctx, ids, panelStart.UnixNano(), panelEnd.UnixNano())
+	stages.summaries = time.Since(started)
+	metrics.RecordDrilldownStage("summaries", stages.summaries.Seconds())
 	if err != nil {
 		return out, exemplarError(ctx, err)
 	}

@@ -209,7 +209,8 @@ A semantic version covers the cache schema and aggregation rules; a version
 change atomically discards all private
 read tables and rebuilds from authoritative format-6 Parquet. The background
 worker processes bounded groups; `pitot_read_cache_pending_batches` reports its
-trace backlog independently of the service and edge rollups' publication horizon.
+trace backlog independently of the service and edge rollups' publication horizon,
+and `pitot_read_cache_pending_spans` the spans in that backlog.
 Service-version observations populate their analytical rollup on a separate
 worker, so an analytical-gate wait cannot delay the completed-batch worker.
 Completed-batch and analytical writers use separate gates and two connections

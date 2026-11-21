@@ -3,12 +3,14 @@ package query
 import (
 	"context"
 	"fmt"
-	"github.com/labstack/pitot/internal/queryrows"
-	"github.com/labstack/pitot/internal/telemetry"
-	telemetrystore "github.com/labstack/pitot/internal/telemetry/store"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/labstack/pitot/internal/queryrows"
+	"github.com/labstack/pitot/internal/telemetry"
+	telemetrystore "github.com/labstack/pitot/internal/telemetry/store"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestIndexedExemplarsRankTracesAndTruncate(t *testing.T) {
@@ -339,6 +341,58 @@ func TestExemplarPathsAgreeOnDisplayedStatusAndOrder(t *testing.T) {
 		req.Dashboard.Panels[0].Query.Where = nil
 		if err != nil || !reflect.DeepEqual(raw, indexed) {
 			t.Fatalf("cached=%v raw=%+v indexed=%+v err=%v", cached, raw, indexed, err)
+		}
+	}
+}
+
+func drilldownStageCount(t *testing.T, stage string) uint64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range families {
+		if f.GetName() != "pitot_drilldown_stage_duration_seconds" {
+			continue
+		}
+		for _, m := range f.Metric {
+			for _, l := range m.Label {
+				if l.GetName() == "stage" && l.GetValue() == stage {
+					return m.GetHistogram().GetSampleCount()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// An admitted indexed drill-down observes each of its stages once.
+func TestIndexedExemplarsRecordStages(t *testing.T) {
+	duck, repo := newTestEngine(t)
+	n := fixtureStart.Add(time.Minute).UnixNano()
+	commit(t, repo, []telemetry.Span{{Namespace: "shop", ServiceName: "checkout", TraceID: "trace-00", SpanID: "root", Name: "root", StartUnixNanos: n, EndUnixNanos: n + 1000000, DurationMS: 1}}, nil)
+	if _, err := duck.RefreshReadCaches(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	e := NewExecutor(duck, 30)
+	defer e.Close()
+	e.now = func() time.Time { return fixtureStart.Add(time.Hour) }
+	d := exemplarDashboard("spans")
+	d.Panels[0].Query.Where = []string{"namespace = 'shop'"}
+	req := exemplarRequest(d)
+	req.Dimensions = map[string]string{"service": "checkout"}
+	stages := []string{"admission", "ranking", "summaries"}
+	before := map[string]uint64{}
+	for _, s := range stages {
+		before[s] = drilldownStageCount(t, s)
+	}
+	got, err := e.Exemplars(t.Context(), req)
+	if err != nil || len(got.Traces) != 1 {
+		t.Fatalf("drill-down: %+v %v", got, err)
+	}
+	for _, s := range stages {
+		if got := drilldownStageCount(t, s) - before[s]; got != 1 {
+			t.Fatalf("stage %s observations=%d want 1", s, got)
 		}
 	}
 }
