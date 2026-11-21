@@ -43,7 +43,7 @@
         {
           "path": "internal/ingest/server.go",
           "line": 58,
-          "end_line": 64
+          "end_line": 65
         }
       ]
     },
@@ -72,8 +72,8 @@
       "sources": [
         {
           "path": "internal/telemetry/store/writer.go",
-          "line": 229,
-          "end_line": 236
+          "line": 262,
+          "end_line": 272
         }
       ]
     },
