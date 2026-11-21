@@ -111,6 +111,16 @@ func (e *Executor) Exemplars(ctx context.Context, req ExemplarRequest) (Exemplar
 		cancel()
 		stages := &drilldownStages{admission: time.Since(started)}
 		metrics.RecordDrilldownStage("admission", stages.admission.Seconds())
+		// Slow requests are logged however they end, including a slow
+		// admission that fails: queue saturation is one of the causes.
+		var out ExemplarResponse
+		defer func() {
+			if total := time.Since(started); total >= slowDrilldown {
+				slog.Info("slow exemplar request", "panel_id", req.PanelID, "kind", req.Kind, "indexed", stages.indexed,
+					"total_ms", total.Milliseconds(), "admission_ms", stages.admission.Milliseconds(),
+					"ranking_ms", stages.ranking.Milliseconds(), "summaries_ms", stages.summaries.Milliseconds(), "error", err)
+			}
+		}()
 		if err != nil {
 			if run.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
 				err = ErrBusy
@@ -118,12 +128,7 @@ func (e *Executor) Exemplars(ctx context.Context, req ExemplarRequest) (Exemplar
 			return ExemplarResponse{Traces: []Exemplar{}}, 0, false, err
 		}
 		defer release()
-		out, err := e.exemplars(context.WithValue(run, drilldownStagesKey{}, stages), req, now)
-		if total := time.Since(started); total >= slowDrilldown {
-			slog.Info("slow exemplar request", "panel_id", req.PanelID, "kind", req.Kind, "indexed", stages.indexed,
-				"total_ms", total.Milliseconds(), "admission_ms", stages.admission.Milliseconds(),
-				"ranking_ms", stages.ranking.Milliseconds(), "summaries_ms", stages.summaries.Milliseconds(), "error", err)
-		}
+		out, err = e.exemplars(context.WithValue(run, drilldownStagesKey{}, stages), req, now)
 		size := int64(256+len(out.Traces)*256) + out.Logs.size()
 		return out, size, err == nil, err
 	})

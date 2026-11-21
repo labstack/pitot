@@ -74,7 +74,7 @@ func TestDrilldownScaleBenchmark(t *testing.T) {
 		for i := range traces {
 			seq++
 			trace := fmt.Sprintf("%016x%016x", seq*0x9e3779b97f4a7c15, rng.Uint64())
-			start := from.Add(time.Duration(int64(spread) * int64(i) / int64(traces)))
+			start := from.Add(time.Duration(float64(spread) * float64(i) / float64(traces)))
 			status := "STATUS_CODE_UNSET"
 			if rng.IntN(1000) == 0 {
 				status = "STATUS_CODE_ERROR"
@@ -219,7 +219,11 @@ func TestDrilldownScaleBenchmark(t *testing.T) {
 					}
 					for rows.Next() {
 					}
+					err = rows.Err()
 					rows.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
 					execMS = append(execMS, float64(time.Since(s))/1e6)
 				}
 				if explain == win.name || explain == "all" {
@@ -257,6 +261,9 @@ func TestDrilldownScaleBenchmark(t *testing.T) {
 	// back to back (24h window) for PITOT_DD_LOAD seconds.
 	if load := env("PITOT_DD_LOAD", 0); load > 0 {
 		rate := env("PITOT_DD_RATE", 25)
+		if rate <= 0 {
+			t.Fatalf("PITOT_DD_RATE=%d must be positive", rate)
+		}
 		ctx, cancel := context.WithTimeout(t.Context(), time.Duration(load)*time.Second)
 		defer cancel()
 		done := make(chan struct{}, 4)
