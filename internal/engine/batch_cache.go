@@ -213,13 +213,15 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 		}
 	}
 	sort.SliceStable(batches, func(i, j int) bool { return newestBatchEvent(batches[i]) < newestBatchEvent(batches[j]) })
-	pendingCount := 0
+	pendingCount, pendingSpans := 0, 0
 	for _, b := range batches {
 		if !markers[b.ID] && b.Spans+b.Logs+b.Metrics > 0 {
 			pendingCount++
+			pendingSpans += b.Spans
 		}
 	}
 	metrics.ReadCachePendingBatches.Set(float64(pendingCount))
+	metrics.ReadCachePendingSpans.Set(float64(pendingSpans))
 	pending := []telemetry.BatchMetadata{}
 	pendingRows, selected := 0, 0
 	for i := len(batches) - 1; i >= 0; i-- {
@@ -392,7 +394,11 @@ func (d *Duck) aggregateSources(ctx context.Context, db snapshotSQL, batches []t
 	}
 	// Only statements that rank traces pay for the per-batch exemplar source.
 	if traces {
-		sources["trace_exemplars"] = d.traceExemplarSource(batches, markers, w)
+		source, err := d.traceExemplarSource(ctx, db, batches, markers, w)
+		if err != nil {
+			return err
+		}
+		sources["trace_exemplars"] = source
 	}
 	return nil
 }

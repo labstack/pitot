@@ -32,6 +32,14 @@ const createTraceExemplarsTable = `CREATE TABLE IF NOT EXISTS read_trace_exempla
 // traceExemplarDepth bounds every completed-trace ranking limit.
 const traceExemplarDepth = queryrows.CompletedTraceLimit
 
+// tracePruneTailSpans is the raw tail size from which ranking reads a cached
+// threshold to prune it. The threshold costs a ranking of the cached rows
+// (about 6 ms over a cached 24-hour window in the drill-down bench), so it
+// pays only once the tail's aggregation costs more: it saves about 40 ms on a
+// 3M-span tail and nothing on 100k spans spread over 200 files. Pruning or
+// not, the result is the same.
+const tracePruneTailSpans = 250_000
+
 const minuteNanos = int64(60_000_000_000)
 
 // floorMinute is floor division, also for instants before the epoch.
@@ -240,7 +248,17 @@ func insertTraceExemplars(ctx context.Context, tx *sql.Tx, source string) (int64
 // full rows, a partial start minute its suffix rows, a partial end minute its
 // prefix rows, and uncached files their raw spans. A window inside one minute
 // reads the overlapping files' raw spans.
-func (d *Duck) traceExemplarSource(batches []telemetry.BatchMetadata, markers map[string]bool, w queryrows.Window) string {
+//
+// The raw tail keeps only spans that score at least the traceExemplarDepth-th
+// best cached trace. Cached rows are real in-window spans, so at least that
+// many traces score this threshold or more, and so does every trace ranked at
+// or above that depth. A pruned span scores below it: it is the best span of
+// no such trace, and removing it leaves every other trace's score unchanged.
+// Ties keep their spans. With fewer cached traces than the depth, nothing is
+// pruned. The threshold is a constant read in the same snapshot from the
+// cached rows also flagged in_full: any subset of in-window spans gives a
+// valid bound, and this one is tight and cheaper to rank than every row.
+func (d *Duck) traceExemplarSource(ctx context.Context, db snapshotSQL, batches []telemetry.BatchMetadata, markers map[string]bool, w queryrows.Window) (string, error) {
 	start, end := w.Start.UnixNano(), w.End.UnixNano()
 	startMinute, endMinute := floorMinute(start), floorMinute(end)
 	partialStart, partialEnd := start != startMinute, end != endMinute
@@ -264,10 +282,12 @@ func (d *Duck) traceExemplarSource(batches []telemetry.BatchMetadata, markers ma
 	if w.Service != "" {
 		scope.WriteString(" AND service=" + sqlLiteral(w.Service))
 	}
-	tail := `SELECT namespace,service,trace_id,start_time,start_unix_nano,duration,has_error FROM (SELECT coalesce(namespace,'') AS namespace,coalesce(service,'') AS service,trace_id,start_time,start_unix_nano,end_unix_nano-start_unix_nano AS duration,
- CASE WHEN status='STATUS_CODE_ERROR' THEN 1 ELSE 0 END AS has_error FROM (` + cleanSource("spans", d.snapshotSource("spans", raw, batches)) + `) WHERE ` + windowPredicate("start_time", w) + ` AND trace_id<>'') WHERE true` + scope.String()
+	tail := func(threshold string) string {
+		return `SELECT namespace,service,trace_id,start_time,start_unix_nano,duration,has_error FROM (SELECT coalesce(namespace,'') AS namespace,coalesce(service,'') AS service,trace_id,start_time,start_unix_nano,end_unix_nano-start_unix_nano AS duration,
+ CASE WHEN status='STATUS_CODE_ERROR' THEN 1 ELSE 0 END AS has_error FROM (` + cleanSource("spans", d.snapshotSource("spans", raw, batches)) + `) WHERE ` + windowPredicate("start_time", w) + ` AND trace_id<>'') WHERE true` + scope.String() + threshold
+	}
 	if len(cachedIDs) == 0 {
-		return tail
+		return tail(""), nil
 	}
 	fullFrom := startMinute
 	if partialStart {
@@ -282,5 +302,23 @@ func (d *Duck) traceExemplarSource(batches []telemetry.BatchMetadata, markers ma
 	}
 	cached := `SELECT namespace,service,trace_id,make_timestamp_ns(start_unix_nano)::TIMESTAMPTZ_NS AS start_time,start_unix_nano,duration,has_error FROM read_trace_exemplars WHERE batch_id IN (SELECT unnest([` + idsSQL(cachedIDs) + `]))` +
 		fmt.Sprintf(" AND minute>=%d AND minute<=%d", startMinute, endMinute) + scope.String() + ` AND (` + strings.Join(ranges, " OR ") + `)`
-	return cached + ` UNION ALL ` + tail
+	tailSpans := 0
+	for _, b := range raw {
+		tailSpans += b.Spans
+	}
+	threshold := ""
+	if len(raw) > 0 && tailSpans >= d.tracePruneSpans {
+		var traces, failed, duration int64
+		if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT count(*),coalesce(min(score)[1],0),coalesce(min(score)[2],0) FROM (SELECT max([has_error::BIGINT,duration]) AS score FROM (%s) GROUP BY namespace,trace_id ORDER BY score DESC LIMIT %d)`, cached+" AND in_full", traceExemplarDepth)).Scan(&traces, &failed, &duration); err != nil {
+			return "", err
+		}
+		switch {
+		case traces < traceExemplarDepth:
+		case failed != 0:
+			threshold = fmt.Sprintf(" AND has_error=1 AND duration>=%d", duration)
+		default:
+			threshold = fmt.Sprintf(" AND (has_error=1 OR duration>=%d)", duration)
+		}
+	}
+	return cached + ` UNION ALL ` + tail(threshold), nil
 }

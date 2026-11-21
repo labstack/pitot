@@ -226,6 +226,18 @@ Monitor admission and compaction together:
   `pitot_compaction_retired_batches_total` counts input batches retired by
   successful publications. Compare its rate with backlog growth.
 
+Diagnose slow trace drill-downs (`POST /api/queries/exemplars`) by stage:
+
+- `pitot_drilldown_stage_duration_seconds{stage}` times `admission` (the wait
+  for a read slot, on every exemplar run), `ranking` (the completed-trace query
+  and its rows) and `summaries` (root lookup for the ranked traces). Result-cache
+  hits are not observed.
+- `pitot_read_cache_pending_spans` counts spans in batches the read cache has
+  not covered yet. Ranking scans them raw, so a large value with slow `ranking`
+  points at read-cache lag rather than retained data.
+- An exemplar run that takes a second or more logs `slow exemplar request` at
+  info level with the same stage breakdown in milliseconds.
+
 Run Pitot under a supervisor that restarts it on exit: Docker or Compose with
 `restart: unless-stopped` (`--restart unless-stopped`), systemd with
 `Restart=on-failure`, or Kubernetes. Docker's `HEALTHCHECK` only marks a

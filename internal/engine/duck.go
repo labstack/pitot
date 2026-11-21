@@ -108,6 +108,8 @@ type Duck struct {
 	servicePending bool
 	// snapshotWanted replaces the repository's retirement check in tests.
 	snapshotWanted func(telemetry.SnapshotPin) bool
+	// tracePruneSpans is tracePruneTailSpans; tests lower it to prune small tails.
+	tracePruneSpans int
 	// writeGate serializes writes to the rebuildable DuckDB rollup cache.
 	writeGate writegate.Gate
 	cacheGate writegate.Gate
@@ -405,7 +407,7 @@ func NewDuck(ctx context.Context, cfg config.Config, repository *telemetrystore.
 	if err != nil {
 		return nil, fmt.Errorf("open DuckDB query cache: %w (the cache at %s is rebuildable from Parquet)", err, dbPath)
 	}
-	d := &Duck{DB: db, writeDB: writeDB, memoryDB: memoryDB, parseDB: parseDB, cfg: cfg, repository: repository, publicationBounds: repository.PublicationBounds, fatal: make(chan error, 1)}
+	d := &Duck{DB: db, writeDB: writeDB, memoryDB: memoryDB, parseDB: parseDB, cfg: cfg, repository: repository, publicationBounds: repository.PublicationBounds, fatal: make(chan error, 1), tracePruneSpans: tracePruneTailSpans}
 	d.noteProgress()
 	// Reads are the pool that can starve, so it is the one worth watching.
 	d.releasePoolGauges = metrics.SetDuckDBPoolSource(db.Stats)

@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,6 +278,7 @@ func rawOracleSpans(t *testing.T, d *Duck) []oracleSpan {
 // shorter than, about, and longer than a minute, aligned or not.
 func TestCompletedTraceQueryMatchesBruteForce(t *testing.T) {
 	d, repo := newBatchCacheTest(t)
+	d.tracePruneSpans = 1 // Prune every uncached tail by its cached threshold.
 	r := rand.New(rand.NewSource(11))
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	const minutes = 5
@@ -475,5 +477,185 @@ func TestCompletedTraceQueryMatchesBruteForceBeforeEpoch(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// boundTraceSource binds CompletedTraceQuery as a read does and reports
+// whether its uncached tail is pruned by a cached threshold.
+func boundTraceSource(t *testing.T, d *Duck, w queryrows.Window) bool {
+	t.Helper()
+	w.Kind = queryrows.TraceCandidateRead
+	pin := d.repository.Parquet.Pin()
+	defer d.repository.Parquet.Unpin(pin)
+	tx, err := d.DB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	bound, err := d.bindSnapshot(queryrows.WithWindow(t.Context(), w), tx, queryrows.CompletedTraceQuery, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Contains(bound, "duration>=")
+}
+
+// The uncached tail keeps only spans scoring at least the depth-th cached
+// trace. A tail span can still win outright, lift a cached trace, tie the
+// threshold and win on trace_id, or be pruned without changing a cached
+// trace; with fewer cached traces than the depth nothing is pruned.
+func TestCompletedTraceQueryPrunesUncachedTailExactly(t *testing.T) {
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	ms := int64(time.Millisecond)
+	span := func(trace string, minute int, dur int64, failed bool) telemetry.Span {
+		start := base.UnixNano() + int64(minute)*minuteNanos + int64(len(trace))*int64(time.Second)
+		status := "STATUS_CODE_OK"
+		if failed {
+			status = "STATUS_CODE_ERROR"
+		}
+		return telemetry.Span{Namespace: "prod", ServiceName: "api", TraceID: trace, SpanID: fmt.Sprintf("%s-%d-%d", trace, minute, dur),
+			StartUnixNanos: start, EndUnixNanos: start + dur, DurationMS: float64(dur) / 1e6, StatusCode: status, IngestedAt: base.UnixNano()}
+	}
+	run := func(t *testing.T, cachedTraces int, cachedFailed bool, tail []telemetry.Span, pruned bool) {
+		d, repo := newBatchCacheTest(t)
+		d.tracePruneSpans = 1
+		var cached []telemetry.Span
+		for i := range cachedTraces {
+			cached = append(cached, span(fmt.Sprintf("t%02d", i), i%3, int64(cachedTraces-i)*ms, cachedFailed))
+		}
+		if err := commitRestoredFixture(repo, t.Context(), telemetrystore.Batch{ID: "cached", Spans: cached}); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			rows, err := d.RefreshReadCaches(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rows == 0 {
+				break
+			}
+		}
+		if err := commitRestoredFixture(repo, t.Context(), telemetrystore.Batch{ID: "tail", Spans: tail}); err != nil {
+			t.Fatal(err)
+		}
+		raw := rawOracleSpans(t, d)
+		for _, bounds := range [][2]time.Duration{{0, 3 * time.Minute}, {30 * time.Second, 150 * time.Second}, {-time.Minute, 4 * time.Minute}} {
+			w := queryrows.Window{Start: base.Add(bounds[0]), End: base.Add(bounds[1]), Namespace: "prod", Service: "api"}
+			if bounds[0] == 0 {
+				if got := boundTraceSource(t, d, w); got != pruned {
+					t.Fatalf("window=%v tail pruned=%v want %v", bounds, got, pruned)
+				}
+			}
+			for _, limit := range []int{1, 5, traceExemplarDepth} {
+				got := completedTraces(t, d, w, limit)
+				want := bruteCompletedTraces(raw, w.Start.UnixNano(), w.End.UnixNano(), w.Namespace, w.Service, limit)
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("window=%v limit=%d:\n got %v\nwant %v", bounds, limit, got, want)
+				}
+			}
+		}
+	}
+	// 30 cached traces score 30..1 ms; the 21st, t20, scores 10 ms.
+	t.Run("tail winners and split traces", func(t *testing.T) {
+		run(t, 30, false, []telemetry.Span{
+			span("new-best", 1, 100*ms, false), // wins outright
+			span("t25", 2, 50*ms, false),       // lifts a cached trace into the top
+			span("t00", 1, ms, false),          // pruned; t00 keeps its cached score
+			span("below", 2, 9*ms, false),      // pruned
+			span("err", 0, ms, true),           // an error outranks every duration
+		}, true)
+	})
+	// The 21st place is decided between a raw span tying the threshold and t20.
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("threshold ties failed=%v", failed), func(t *testing.T) {
+			run(t, 30, failed, []telemetry.Span{
+				span("a-tie", 0, 10*ms, failed), // ties t20 and wins on trace_id
+				span("z-tie", 1, 10*ms, failed), // ties t20 and loses on trace_id
+				span("t29", 2, 10*ms, failed),   // a cached trace lifted to the tie
+				span("below", 2, 9*ms, failed),  // pruned
+			}, true)
+		})
+	}
+	t.Run("error threshold", func(t *testing.T) {
+		var tail []telemetry.Span
+		for i := range 25 {
+			tail = append(tail, span(fmt.Sprintf("e%02d", i), i%3, int64(1+i%12)*ms, true))
+		}
+		tail = append(tail, span("t05", 1, 20*ms, true), span("slow", 1, 900*ms, false))
+		run(t, 30, true, tail, true)
+	})
+	t.Run("fewer cached traces than the depth", func(t *testing.T) {
+		var tail []telemetry.Span
+		for i := range 30 {
+			tail = append(tail, span(fmt.Sprintf("n%02d", i), i%3, int64(1+i%7)*ms, i%11 == 0))
+		}
+		run(t, traceExemplarDepth-1, false, append(tail, span("t03", 2, 40*ms, false)), false)
+	})
+}
+
+// Random tails against brute force: few traces and coarse durations force
+// threshold ties and traces split between cached rows and the raw tail.
+func TestCompletedTraceQueryTailPruningMatchesBruteForce(t *testing.T) {
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for seed := range int64(6) {
+		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+			d, repo := newBatchCacheTest(t)
+			d.tracePruneSpans = 1
+			r := rand.New(rand.NewSource(seed))
+			traces := 25 + r.Intn(40)
+			batch := func(id string, n int) telemetrystore.Batch {
+				b := telemetrystore.Batch{ID: id}
+				for i := range n {
+					namespace, service := "prod", "api"
+					if r.Intn(5) == 0 {
+						service = "db"
+					}
+					if r.Intn(7) == 0 {
+						namespace = "edge"
+					}
+					start := base.UnixNano() + int64(r.Intn(36))*5*int64(time.Second)
+					dur := int64(1+r.Intn(6)) * int64(time.Millisecond)
+					status := "STATUS_CODE_OK"
+					if r.Intn(30) == 0 {
+						status = "STATUS_CODE_ERROR"
+					}
+					b.Spans = append(b.Spans, telemetry.Span{Namespace: namespace, ServiceName: service, TraceID: fmt.Sprintf("trace-%02d", r.Intn(traces)),
+						SpanID: fmt.Sprintf("%s-%d", id, i), StartUnixNanos: start, EndUnixNanos: start + dur, DurationMS: float64(dur) / 1e6, StatusCode: status, IngestedAt: base.UnixNano()})
+				}
+				return b
+			}
+			for i := range 3 {
+				if err := commitRestoredFixture(repo, t.Context(), batch(fmt.Sprintf("c%d", i), 150)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for {
+				rows, err := d.RefreshReadCaches(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if rows == 0 {
+					break
+				}
+			}
+			for i := range 2 {
+				if err := commitRestoredFixture(repo, t.Context(), batch(fmt.Sprintf("u%d", i), 60+r.Intn(100))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			raw := rawOracleSpans(t, d)
+			at := func(seconds int64) time.Time { return base.Add(time.Duration(seconds) * time.Second) }
+			for _, bounds := range [][2]int64{{0, 180}, {0, 120}, {25, 155}, {60, 180}, {-60, 240}} {
+				for _, sc := range [][2]string{{"", ""}, {"prod", ""}, {"prod", "api"}, {"", "db"}} {
+					for _, limit := range []int{1, traceExemplarDepth} {
+						w := queryrows.Window{Start: at(bounds[0]), End: at(bounds[1]), Namespace: sc[0], Service: sc[1]}
+						got := completedTraces(t, d, w, limit)
+						want := bruteCompletedTraces(raw, w.Start.UnixNano(), w.End.UnixNano(), sc[0], sc[1], limit)
+						if !reflect.DeepEqual(got, want) {
+							t.Fatalf("window=%v scope=%v limit=%d:\n got %v\nwant %v", bounds, sc, limit, got, want)
+						}
+					}
+				}
+			}
+		})
 	}
 }
