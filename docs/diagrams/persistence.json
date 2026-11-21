@@ -10,7 +10,7 @@
       "url": "https://github.com/labstack/pitot.git",
       "provider": "github",
       "link_mode": "web",
-      "revision": "681d46ba8cf0a92ea85764bfa4736a8e2739a8c9"
+      "revision": "d6f7c969846f841495b9ff965a75c5b0aff8742f"
     }
   },
   "stages": [
@@ -42,8 +42,8 @@
       "sources": [
         {
           "path": "internal/ingest/server.go",
-          "line": 54,
-          "end_line": 60
+          "line": 58,
+          "end_line": 65
         }
       ]
     },
@@ -72,8 +72,8 @@
       "sources": [
         {
           "path": "internal/telemetry/store/writer.go",
-          "line": 143,
-          "end_line": 150
+          "line": 262,
+          "end_line": 272
         }
       ]
     },
@@ -87,18 +87,18 @@
       "sources": [
         {
           "path": "internal/telemetry/parquet.go",
-          "line": 194,
-          "end_line": 217
+          "line": 316,
+          "end_line": 339
         },
         {
           "path": "internal/telemetry/parquet.go",
-          "line": 282,
-          "end_line": 282
+          "line": 1430,
+          "end_line": 1430
         },
         {
           "path": "internal/telemetry/parquet.go",
-          "line": 308,
-          "end_line": 345
+          "line": 390,
+          "end_line": 427
         }
       ]
     },
@@ -113,13 +113,13 @@
       "sources": [
         {
           "path": "internal/telemetry/parquet.go",
-          "line": 26,
-          "end_line": 26
+          "line": 29,
+          "end_line": 29
         },
         {
           "path": "internal/config/config.go",
-          "line": 219,
-          "end_line": 219
+          "line": 265,
+          "end_line": 265
         }
       ]
     },
@@ -133,13 +133,13 @@
       "sources": [
         {
           "path": "internal/telemetry/trace_index.go",
-          "line": 215,
-          "end_line": 238
+          "line": 242,
+          "end_line": 252
         },
         {
           "path": "internal/telemetry/log_index.go",
-          "line": 399,
-          "end_line": 433
+          "line": 441,
+          "end_line": 475
         }
       ]
     },
@@ -152,9 +152,9 @@
       "row": 1,
       "sources": [
         {
-          "path": "internal/query/duck.go",
-          "line": 240,
-          "end_line": 244
+          "path": "internal/engine/duck.go",
+          "line": 383,
+          "end_line": 387
         }
       ]
     },
@@ -167,19 +167,19 @@
       "row": 2,
       "sources": [
         {
-          "path": "internal/query/duck.go",
-          "line": 627,
-          "end_line": 653
+          "path": "internal/engine/duck.go",
+          "line": 947,
+          "end_line": 973
         },
         {
-          "path": "internal/query/duck.go",
-          "line": 692,
-          "end_line": 693
+          "path": "internal/engine/duck.go",
+          "line": 1029,
+          "end_line": 1030
         },
         {
           "path": "internal/telemetry/store/compaction.go",
-          "line": 132,
-          "end_line": 177
+          "line": 145,
+          "end_line": 190
         }
       ]
     },
@@ -192,19 +192,19 @@
       "row": 1,
       "sources": [
         {
-          "path": "internal/query/duck.go",
-          "line": 505,
-          "end_line": 522
+          "path": "internal/engine/duck.go",
+          "line": 794,
+          "end_line": 811
         },
         {
-          "path": "internal/query/duck.go",
-          "line": 1437,
-          "end_line": 1437
+          "path": "internal/engine/duck.go",
+          "line": 2037,
+          "end_line": 2037
         },
         {
-          "path": "internal/query/duck.go",
-          "line": 1622,
-          "end_line": 1622
+          "path": "internal/engine/duck.go",
+          "line": 2417,
+          "end_line": 2417
         }
       ]
     },
@@ -218,8 +218,8 @@
       "sources": [
         {
           "path": "internal/config/config.go",
-          "line": 227,
-          "end_line": 232
+          "line": 273,
+          "end_line": 278
         }
       ]
     }

@@ -448,13 +448,13 @@ svg[data-preset="editorial"] { --flow-halo-peak: 0.07; --flow-glow-peak: 0.28; -
 @keyframes archify-relay-comet-4 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
   1.803% { opacity: var(--flow-peak, 0.9); }
-  10.681% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  13.085%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  9.956% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  12.36%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-4 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  10.681% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  24.206%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  9.956% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  23.481%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-5 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
@@ -543,9 +543,9 @@ svg[data-preset="editorial"] { --flow-halo-peak: 0.07; --flow-glow-peak: 0.28; -
 }
 @keyframes archify-relay-node-5 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  52.608% { filter: var(--ambient-node-base-filter, none); }
-  54.412%, 58.92% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  70.642% { filter: var(--ambient-node-base-filter, none); }
+  51.884% { filter: var(--ambient-node-base-filter, none); }
+  53.687%, 58.196% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  69.917% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-6 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
@@ -622,7 +622,7 @@ rect.c-bg-rect { fill: var(--bg); }
         <path data-edge-from="admission" data-edge-to="workers" data-edge-label="grouped batch" data-edge-key="1" data-edge-id="group" data-composition-points="315,186;315,242" d="M 315 186 L 315 242" class="a-emphasis" data-animate="edge" style="--step: 1;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="workers" data-edge-to="publish" data-edge-label="Parquet + index" data-edge-key="2" data-edge-id="encode" data-composition-points="315,300;315,356" d="M 315 300 L 315 356" class="a-emphasis" data-animate="edge" style="--step: 2;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="publish" data-edge-to="batches" data-edge-label="ack after publish" data-edge-key="3" data-edge-id="durable" data-composition-points="371,385;422.5,385;422.5,271;474,271" d="M 371 385 L 422.5 385 L 422.5 271 L 474 271" class="a-emphasis" data-animate="edge" style="--step: 3;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="batches" data-edge-to="trace" data-edge-label="row ranges" data-edge-key="4" data-edge-id="trace-read" data-composition-points="586,253;637.5,253;637.5,157;689,157" d="M 586 253 L 637.5 253 L 637.5 157 L 689 157" class="a-default" data-animate="edge" style="--step: 4;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="batches" data-edge-to="trace" data-edge-label="row ranges" data-edge-key="4" data-edge-id="trace-read" data-composition-points="586,253;630.75,253;630.75,157;675.5,157" d="M 586 253 L 630.75 253 L 630.75 157 L 675.5 157" class="a-default" data-animate="edge" style="--step: 4;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="batches" data-edge-to="sql" data-edge-label="Parquet scan" data-edge-key="5" data-edge-id="sql-read" data-composition-points="586,265;689,265" d="M 586 265 L 689 265" class="a-default" data-animate="edge" style="--step: 5;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="batches" data-edge-to="maintain" data-edge-label="bounded groups" data-edge-key="6" data-edge-id="select" data-composition-points="586,277;637.5,277;637.5,376;689,376" d="M 586 277 L 637.5 277 L 637.5 376 L 689 376" class="a-dashed" data-animate="edge" style="--step: 6;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="maintain" data-edge-to="batches" data-edge-label="atomic swap" data-edge-key="7" data-edge-id="swap" data-composition-points="689,394;637.5,394;637.5,289;586,289" d="M 689 394 L 637.5 394 L 637.5 289 L 586 289" class="a-dashed" data-animate="edge" style="--step: 7;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
@@ -688,15 +688,15 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="530" y="295.9" class="t-database" font-size="7" text-anchor="middle">authoritative</text>
         </g>
 
-        <g id="node-trace" data-node-id="trace" data-node-label="Indexed trace read" tabindex="0" role="button" aria-label="Focus Indexed trace read, trace.fidx lookup, 04 / Read and maintain" aria-pressed="false" data-node-kind="backend" data-node-sublabel="trace.fidx lookup" data-node-context="04 / Read and maintain">
-          <title>Indexed trace read · trace.fidx lookup · 04 / Read and maintain</title>
-          <rect x="689" y="128" width="112" height="58" rx="6" class="c-mask"/>
-          <rect x="689" y="128" width="112" height="58" rx="6" class="c-backend" data-animate="node" style="--step: 5; --flow-node-name: archify-relay-node-5;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(695 134) scale(0.6875)">
+        <g id="node-trace" data-node-id="trace" data-node-label="Indexed trace read" tabindex="0" role="button" aria-label="Focus Indexed trace read, trace.fidx and logs.fidx lookup, 04 / Read and maintain" aria-pressed="false" data-node-kind="backend" data-node-sublabel="trace.fidx and logs.fidx lookup" data-node-context="04 / Read and maintain">
+          <title>Indexed trace read · trace.fidx and logs.fidx lookup · 04 / Read and maintain</title>
+          <rect x="675.5" y="128" width="139" height="58" rx="6" class="c-mask"/>
+          <rect x="675.5" y="128" width="139" height="58" rx="6" class="c-backend" data-animate="node" style="--step: 5; --flow-node-name: archify-relay-node-5;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(681.5 134) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="745" y="160.6" class="t-primary" font-size="9.6" font-weight="600" text-anchor="middle">Indexed trace read</text>
-          <text x="745" y="173.9" class="t-muted" font-size="7" text-anchor="middle">trace.fidx lookup</text>
+          <text data-node-label="" x="745" y="161" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Indexed trace read</text>
+          <text x="745" y="174.4" class="t-muted" font-size="7" text-anchor="middle">trace.fidx and logs.fidx lookup</text>
         </g>
 
         <g id="node-sql" data-node-id="sql" data-node-label="DuckDB SQL" tabindex="0" role="button" aria-label="Focus DuckDB SQL, filters and scans, 04 / Read and maintain" aria-pressed="false" data-node-kind="backend" data-node-sublabel="filters and scans" data-node-context="04 / Read and maintain">
@@ -762,8 +762,8 @@ rect.c-bg-rect { fill: var(--bg); }
           <text x="422.5" y="318" class="t-edge-emphasis" font-size="8" text-anchor="middle">ack after publish</text>
         </g>
         <g data-edge-from="batches" data-edge-to="trace" data-edge-label="row ranges" data-edge-key="4" data-edge-id="trace-read">
-          <rect x="607" y="184" width="61" height="16" rx="4" class="c-mask"/>
-          <text x="637.5" y="195" class="t-edge-default" font-size="8" text-anchor="middle">row ranges</text>
+          <rect x="600.25" y="184" width="61" height="16" rx="4" class="c-mask"/>
+          <text x="630.75" y="195" class="t-edge-default" font-size="8" text-anchor="middle">row ranges</text>
         </g>
         <g data-edge-from="batches" data-edge-to="sql" data-edge-label="Parquet scan" data-edge-key="5" data-edge-id="sql-read">
           <rect x="554.7" y="216" width="70.8" height="16" rx="4" class="c-mask"/>
