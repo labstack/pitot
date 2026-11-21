@@ -45,3 +45,25 @@ func TestPanelAdmissionLabelsBoundUserInput(t *testing.T) {
 		}
 	}
 }
+
+func TestDrilldownStageLabelsBoundInput(t *testing.T) {
+	count := func(stage string) uint64 {
+		m := &dto.Metric{}
+		if err := drilldownStageDuration.WithLabelValues(stage).(prometheus.Metric).Write(m); err != nil {
+			t.Fatal(err)
+		}
+		return m.Histogram.GetSampleCount()
+	}
+	for _, stage := range []string{"admission", "ranking", "summaries"} {
+		before := count(stage)
+		RecordDrilldownStage(stage, .1)
+		if count(stage)-before != 1 {
+			t.Fatalf("missing drill-down stage %s", stage)
+		}
+	}
+	before := count("other")
+	RecordDrilldownStage("unknown stage", .1)
+	if count("other")-before != 1 {
+		t.Fatal("unknown stage did not fall back to other")
+	}
+}

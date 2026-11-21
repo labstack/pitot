@@ -775,6 +775,9 @@ func TestReadCacheBudgetsAllSignalsAndReportsInventoryWork(t *testing.T) {
 	if got := metricFamily(t, "pitot_read_cache_pending_batches").Metric[0].GetGauge().GetValue(); got != 3 {
 		t.Fatalf("pending all-signal gauge=%v want 3", got)
 	}
+	if got := metricFamily(t, "pitot_read_cache_pending_spans").Metric[0].GetGauge().GetValue(); got != 2 {
+		t.Fatalf("pending spans gauge=%v want 2", got)
+	}
 	written, err = d.RefreshReadCaches(t.Context())
 	if err != nil {
 		t.Fatal(err)

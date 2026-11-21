@@ -48,6 +48,9 @@ const (
 
 var (
 	ReadCachePendingBatches = promauto.NewGauge(prometheus.GaugeOpts{Name: "pitot_read_cache_pending_batches", Help: "Nonempty active immutable batches across spans, logs and metrics not covered at the start of the last read-cache pass"})
+	// Drill-down ranking scans uncached spans raw, so their count, not the
+	// batch count, sizes that part of its cost.
+	ReadCachePendingSpans = promauto.NewGauge(prometheus.GaugeOpts{Name: "pitot_read_cache_pending_spans", Help: "Spans in active immutable batches not covered at the start of the last read-cache pass"})
 
 	// QueryCacheRequests counts panel, exemplar and trace-detail lookups in the
 	// query result cache: hit (fresh), stale (served while one refresh runs),
