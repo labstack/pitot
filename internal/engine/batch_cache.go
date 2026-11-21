@@ -394,7 +394,11 @@ func (d *Duck) aggregateSources(ctx context.Context, db snapshotSQL, batches []t
 	}
 	// Only statements that rank traces pay for the per-batch exemplar source.
 	if traces {
-		sources["trace_exemplars"] = d.traceExemplarSource(batches, markers, w)
+		source, err := d.traceExemplarSource(ctx, db, batches, markers, w)
+		if err != nil {
+			return err
+		}
+		sources["trace_exemplars"] = source
 	}
 	return nil
 }

@@ -127,6 +127,13 @@ is a union, not a join, so its cost is that of the uncached data only. A window
 whose start and end fall in the same minute reads footer-pruned Parquet of the
 overlapping files exactly, as the generic drill path already does.
 
+A large uncached tail (250k spans or more) is pruned exactly. In the same
+snapshot, the query first ranks the covered minutes' `full` rows and, when
+they hold at least 21 traces, keeps only tail spans that score at least the
+21st (error, then duration; ties kept). Those rows are real in-window spans,
+so every top-21 trace scores at least that much, and a pruned span is the
+best span of no top trace. The threshold is a constant in the bound query.
+
 ### Exactness
 
 If a trace's best in-window span lies in partition P and the trace is in the
