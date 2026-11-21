@@ -410,6 +410,24 @@ type drilldownStages struct {
 
 type drilldownStagesKey struct{}
 
+func (e *Executor) rankTraces(ctx context.Context, w queryrows.Window) ([]telemetry.TraceIdentity, error) {
+	rows, err := e.engine.QueryContext(queryrows.WithWindow(ctx, w), queryrows.CompletedTraceQuery, w.Start, w.End, w.Namespace, w.Namespace, w.Service, w.Service, 21)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []telemetry.TraceIdentity
+	for rows.Next() {
+		var id telemetry.TraceIdentity
+		var hasError int
+		if err := rows.Scan(&id.Namespace, &id.TraceID, &hasError); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (e *Executor) indexedExemplars(ctx context.Context, w queryrows.Window, panelStart, panelEnd time.Time) (ExemplarResponse, error) {
 	out := ExemplarResponse{Traces: []Exemplar{}}
 	stages, _ := ctx.Value(drilldownStagesKey{}).(*drilldownStages)
@@ -417,23 +435,9 @@ func (e *Executor) indexedExemplars(ctx context.Context, w queryrows.Window, pan
 		stages = &drilldownStages{}
 	}
 	stages.indexed = true
+	// Failed and timed-out rankings are recorded too: they are the slow ones.
 	started := time.Now()
-	rows, err := e.engine.QueryContext(queryrows.WithWindow(ctx, w), queryrows.CompletedTraceQuery, w.Start, w.End, w.Namespace, w.Namespace, w.Service, w.Service, 21)
-	if err != nil {
-		return out, exemplarError(ctx, err)
-	}
-	var ids []telemetry.TraceIdentity
-	for rows.Next() {
-		var id telemetry.TraceIdentity
-		var hasError int
-		if err := rows.Scan(&id.Namespace, &id.TraceID, &hasError); err != nil {
-			rows.Close()
-			return out, exemplarError(ctx, err)
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
+	ids, err := e.rankTraces(ctx, w)
 	stages.ranking = time.Since(started)
 	metrics.RecordDrilldownStage("ranking", stages.ranking.Seconds())
 	if err != nil {

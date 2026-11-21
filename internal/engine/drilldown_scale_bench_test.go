@@ -285,7 +285,9 @@ func TestDrilldownScaleBenchmark(t *testing.T) {
 				}
 			}()
 		}
+		refreshed := make(chan struct{})
 		go func() {
+			defer close(refreshed)
 			for ctx.Err() == nil {
 				if _, err := d.RefreshReadCaches(ctx); err == nil {
 					passes.Add(1)
@@ -326,6 +328,7 @@ func TestDrilldownScaleBenchmark(t *testing.T) {
 		for range 4 {
 			<-done
 		}
+		<-refreshed
 		var pending int
 		markers, err := batchMarkers(context.Background(), d.writer())
 		if err != nil {
@@ -338,6 +341,9 @@ func TestDrilldownScaleBenchmark(t *testing.T) {
 		}
 		sort.Float64s(rankMS)
 		sort.Float64s(sumMS)
+		if len(rankMS) == 0 {
+			t.Fatal("load phase ended before the first drill-down")
+		}
 		p := func(xs []float64, q float64) float64 { return xs[int(float64(len(xs)-1)*q)] }
 		t.Logf("LOAD seconds=%d committed=%d cache_passes=%d pending_end=%d drills=%d rank_p50=%.1f p90=%.1f max=%.1f summaries_p50=%.1f p90=%.1f",
 			load, committed.Load(), passes.Load(), pending, len(rankMS), p(rankMS, .5), p(rankMS, .9), p(rankMS, 1), p(sumMS, .5), p(sumMS, .9))

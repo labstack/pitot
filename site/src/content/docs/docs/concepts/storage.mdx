@@ -185,27 +185,25 @@ its ingestion timestamp. Arbitrary SQL retains access to all active files.
 
 Operation panels and log counts scan footer-pruned Parquet for the exact
 requested window. Text searches match the redacted body.
-Notable-trace selection keeps one indexed candidate per trace, updated
-from new batches. A candidate records whether its namespace and service are unambiguous;
-mixed scopes use exact per-batch contributions for the requested scope. Error
-priority, duration, and trace-ID tie ordering are preserved. Boundary trace
-parts are recomputed from Parquet.
+Notable-trace selection ranks each trace by its best in-scope span: errors
+first, then longer duration, then trace ID. The cache keeps a bounded list of
+span exemplars per batch, scope and minute, with no state shared across
+batches. A query reads the lists of the minutes in its window and unions the
+raw spans of uncached batches, ranked the same way. When the uncached tail is
+large, it first takes the 21st-best score from the cached lists and skips tail
+spans below it, which cannot change the result. Windows within one minute read
+footer-pruned Parquet.
 
 These caches acknowledge complete batch IDs rather than an ingestion watermark.
-A batch's trace bounds, candidate updates, and acknowledgement commit in one transaction.
+A batch's exemplar lists and acknowledgement commit in one transaction.
 A read pins active files and reads cache rows and acknowledgements from one
 DuckDB transaction. Newly published uncached files are read directly, so cache
 backfill does not delay visibility. Retired batch contributions are excluded by
 active ID even before cleanup; they cannot invalidate unrelated traces.
-Compaction derives the output trace contributions from complete cached inputs. If an input
+Compaction derives the output's exemplar lists from complete cached inputs. If an input
 is not yet cached, the output remains directly queryable until its own backfill.
 
-Trace data in the private cache consists of per-batch trace parts and one
-incremental candidate per trace. Timestamps are aggregated by batch and trace;
-scope lookups use those parts and candidates. Complete cached compaction replacements
-preserve candidate bounds without recomputation. Retention and incomplete
-replacements recompute only affected trace IDs from active contributions.
-A semantic version covers the cache schema and aggregation rules; a version
+Retention deletes a batch's exemplar rows with the batch. A semantic version covers the cache schema and aggregation rules; a version
 change atomically discards all private
 read tables and rebuilds from authoritative format-6 Parquet. The background
 worker processes bounded groups; `pitot_read_cache_pending_batches` reports its
@@ -215,9 +213,7 @@ Service-version observations populate their analytical rollup on a separate
 worker, so an analytical-gate wait cannot delay the completed-batch worker.
 Completed-batch and analytical writers use separate gates and two connections
 outside the read pool. They modify disjoint tables; maintenance holds both gates
-for checkpointing. Trace reads query retained candidates directly. A
-snapshot-local ambiguity probe includes batch-parts aggregation only when
-the requested scope needs it.
+for checkpointing.
 
 Narrow file selections use explicit lists from footer bounds. Broad selections
 use a glob with a captured-batch-ID filter, which excludes files published after
