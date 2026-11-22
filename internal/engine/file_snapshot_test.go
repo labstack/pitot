@@ -736,6 +736,11 @@ func TestReadCacheRowBudgetAndOversizedFileProgress(t *testing.T) {
 	if err != nil || !markers["newest"] || markers["oversized"] {
 		t.Fatalf("row budget not respected: %v %v", markers, err)
 	}
+	// Steady ingest keeps a newer file pending at every pass; the file the
+	// last pass stopped at still goes next.
+	if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: "newer", Spans: []telemetry.Span{{TraceID: "newer", StartUnixNanos: 3, EndUnixNanos: 4, IngestedAt: 3}}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -746,6 +751,111 @@ func TestReadCacheRowBudgetAndOversizedFileProgress(t *testing.T) {
 	var count int
 	if err := d.DB.QueryRow(`SELECT count(*) FROM read_trace_exemplars WHERE batch_id='oversized'`).Scan(&count); err != nil || count == 0 {
 		t.Fatalf("oversized count=%d: %v", count, err)
+	}
+}
+
+// More newer files than one pass takes arrive before every pass; the oldest
+// file left still leads the next.
+func TestReadCacheOldestFileLeadsPastTheBatchLimit(t *testing.T) {
+	d, repo := newBatchCacheTest(t)
+	if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: "old", Spans: []telemetry.Span{{TraceID: "old", StartUnixNanos: 1, EndUnixNanos: 2, IngestedAt: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	at := int64(10)
+	for pass := range 3 {
+		for range readCacheBatchLimit + 1 {
+			at++
+			if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: fmt.Sprintf("new-%d", at), Spans: []telemetry.Span{{TraceID: fmt.Sprint(at), StartUnixNanos: at, EndUnixNanos: at + 1, IngestedAt: at}}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := d.RefreshReadCaches(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		markers, err := batchMarkers(t.Context(), d.DB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if markers["old"] != (pass > 0) {
+			t.Fatalf("pass %d: old cached=%v", pass, markers["old"])
+		}
+	}
+}
+
+// A lead that failed is left out until its retry time, even when another file
+// leads and succeeds, and is not backlog meanwhile; then it runs alone.
+func TestReadCacheFailedLeadBacksOffAndRunsAlone(t *testing.T) {
+	d, repo := newBatchCacheTest(t)
+	for i, id := range []string{"older", "failed", "newer"} {
+		at := int64(i + 1)
+		if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: id, Spans: []telemetry.Span{{TraceID: id, StartUnixNanos: at, EndUnixNanos: at + 1, IngestedAt: at}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.cacheBlocked = "older"
+	d.cacheLeadFailures = map[string]cacheLeadFailure{"failed": {failures: 1, retry: time.Now().Add(time.Hour)}}
+	_, backlog, err := d.refreshReadCaches(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	markers, err := batchMarkers(t.Context(), d.DB)
+	if err != nil || !markers["older"] || !markers["newer"] || markers["failed"] || backlog || len(d.cacheLeadFailures) != 1 || d.cacheBlocked != "" {
+		t.Fatalf("backoff pass: %v backlog=%v failed=%v blocked=%q %v", markers, backlog, d.cacheLeadFailures, d.cacheBlocked, err)
+	}
+	if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: "newest", Spans: []telemetry.Span{{TraceID: "newest", StartUnixNanos: 9, EndUnixNanos: 10, IngestedAt: 9}}}); err != nil {
+		t.Fatal(err)
+	}
+	d.cacheLeadFailures["failed"] = cacheLeadFailure{failures: 1, retry: time.Now().Add(-time.Second)}
+	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	markers, err = batchMarkers(t.Context(), d.DB)
+	if err != nil || !markers["failed"] || markers["newest"] || len(d.cacheLeadFailures) != 0 || d.cacheBlocked != "newest" {
+		t.Fatalf("retry pass: %v failed=%v blocked=%q %v", markers, d.cacheLeadFailures, d.cacheBlocked, err)
+	}
+}
+
+// A lead whose pass fails retries alone; only failing alone earns a backoff,
+// so an innocent lead is never held back and fresh files keep caching.
+func TestReadCacheBlamesOnlyFilesThatFailAlone(t *testing.T) {
+	d, repo := newBatchCacheTest(t)
+	at := int64(0)
+	commit := func(id string) {
+		at++
+		if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: id, Spans: []telemetry.Span{{TraceID: id, StartUnixNanos: at, EndUnixNanos: at + 1, IngestedAt: at}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"bad-a", "bad-b"} {
+		commit(id)
+		if err := os.Remove(filepath.Join(d.repository.Parquet.BatchPath(id), "spans.parquet")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit("good")
+	d.cacheBlocked = "good"
+	// The innocent lead fails beside the bad files, then caches alone.
+	for pass := range 12 {
+		commit(fmt.Sprintf("fresh-%02d", pass))
+		_, _ = d.RefreshReadCaches(t.Context())
+	}
+	markers, err := batchMarkers(t.Context(), d.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !markers["good"] || markers["bad-a"] || markers["bad-b"] {
+		t.Fatalf("markers=%v", markers)
+	}
+	if _, ok := d.cacheLeadFailures["good"]; ok || len(d.cacheLeadFailures) != 2 {
+		t.Fatalf("failure records %v", d.cacheLeadFailures)
+	}
+	for id, f := range d.cacheLeadFailures {
+		if f.failures < 1 || !f.retry.After(time.Now()) {
+			t.Fatalf("%s failure record %+v", id, f)
+		}
+	}
+	if !markers["fresh-11"] {
+		t.Fatalf("fresh files stopped caching: %v", markers)
 	}
 }
 
@@ -782,16 +892,10 @@ func TestReadCacheBudgetsAllSignalsAndReportsInventoryWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The oldest file left leads, beside the oversized newer one.
 	markers, err = batchMarkers(t.Context(), d.DB)
-	if err != nil || !markers["log-heavy-trace"] || markers["older-trace"] || written != 5 {
+	if err != nil || len(markers) != 3 || written != 8 {
 		t.Fatalf("oversized mixed batch: %v written=%d err=%v", markers, written, err)
-	}
-	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	markers, err = batchMarkers(t.Context(), d.DB)
-	if err != nil || len(markers) != 3 {
-		t.Fatalf("remaining batch: %v %v", markers, err)
 	}
 }
 
