@@ -522,8 +522,12 @@ func TestCompletedTraceQueryPrunesUncachedTailExactly(t *testing.T) {
 		for i := range cachedTraces {
 			cached = append(cached, span(fmt.Sprintf("t%02d", i), i%3, int64(cachedTraces-i)*ms, cachedFailed))
 		}
-		if err := commitRestoredFixture(repo, t.Context(), telemetrystore.Batch{ID: "cached", Spans: cached}); err != nil {
-			t.Fatal(err)
+		cachedBatches := 0
+		if len(cached) > 0 {
+			cachedBatches = 1
+			if err := commitRestoredFixture(repo, t.Context(), telemetrystore.Batch{ID: "cached", Spans: cached}); err != nil {
+				t.Fatal(err)
+			}
 		}
 		for {
 			rows, err := d.RefreshReadCaches(t.Context())
@@ -543,6 +547,18 @@ func TestCompletedTraceQueryPrunesUncachedTailExactly(t *testing.T) {
 			if bounds[0] == 0 {
 				if got := boundTraceSource(t, d, w); got != pruned {
 					t.Fatalf("window=%v tail pruned=%v want %v", bounds, got, pruned)
+				}
+				// The slow drill-down log reports the same source shape.
+				var p queryrows.ReadProfile
+				pw := w
+				pw.Kind = queryrows.TraceCandidateRead
+				rows, err := d.QueryContext(queryrows.WithReadProfile(queryrows.WithWindow(t.Context(), pw), &p), queryrows.CompletedTraceQuery, w.Start, w.End, w.Namespace, w.Namespace, w.Service, w.Service, traceExemplarDepth)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = rows.Close()
+				if p.CachedBatches != cachedBatches || p.TailBatches != 1 || p.TailSpans != len(tail) || p.Pruned != pruned || p.Execute <= 0 {
+					t.Fatalf("profile %+v, want %d cached, 1 tail of %d spans, pruned=%v", p, cachedBatches, len(tail), pruned)
 				}
 			}
 			for _, limit := range []int{1, 5, traceExemplarDepth} {
@@ -589,6 +605,9 @@ func TestCompletedTraceQueryPrunesUncachedTailExactly(t *testing.T) {
 			tail = append(tail, span(fmt.Sprintf("n%02d", i), i%3, int64(1+i%7)*ms, i%11 == 0))
 		}
 		run(t, traceExemplarDepth-1, false, append(tail, span("t03", 2, 40*ms, false)), false)
+	})
+	t.Run("nothing cached", func(t *testing.T) {
+		run(t, 0, false, []telemetry.Span{span("only", 1, 5*ms, false), span("err", 2, ms, true)}, false)
 	})
 }
 
