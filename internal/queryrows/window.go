@@ -88,3 +88,25 @@ func RecordCoverage(ctx context.Context, fresh time.Time) {
 	}
 }
 func (c *Coverage) FreshTo() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.fresh }
+
+// ReadProfile carries one read's phase times, and for a trace ranking its
+// source's shape, back to the caller's slow-request log. A context holds it
+// for a single QueryContext call.
+type ReadProfile struct {
+	Wait, Bind, Execute time.Duration
+	// Cached batches rank from read_trace_exemplars; tail batches and their
+	// spans are read raw, filtered when Pruned.
+	CachedBatches, TailBatches, TailSpans int
+	Pruned                                bool
+}
+type readProfileKey struct{}
+
+func WithReadProfile(ctx context.Context, p *ReadProfile) context.Context {
+	return context.WithValue(ctx, readProfileKey{}, p)
+}
+
+// ReadProfileFrom returns the context's profile, or nil.
+func ReadProfileFrom(ctx context.Context) *ReadProfile {
+	p, _ := ctx.Value(readProfileKey{}).(*ReadProfile)
+	return p
+}

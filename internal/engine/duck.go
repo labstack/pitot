@@ -2507,7 +2507,14 @@ func (d *Duck) QueryContext(ctx context.Context, query string, args ...any) (que
 	// The connection is taken explicitly and timed separately: DB.QueryContext
 	// would fold the wait for a free connection into the statement's duration,
 	// and telling queueing from execution is the whole reason this is measured.
+	var scratch queryrows.ReadProfile
+	profile := queryrows.ReadProfileFrom(ctx)
+	if profile == nil {
+		profile = &scratch
+	}
+	waited := time.Now()
 	conn, pin, err := d.readConn(ctx)
+	profile.Wait = time.Since(waited)
 	if err != nil {
 		return nil, err
 	}
@@ -2561,11 +2568,13 @@ func (d *Duck) QueryContext(ctx context.Context, query string, args ...any) (que
 		}
 	}
 	if windowed {
+		bound := time.Now()
 		tx, err = beginRead(ctx, conn)
 		if err == nil {
 			db = tx
 			query, err = d.bindSnapshot(ctx, tx, query, window)
 		}
+		profile.Bind = time.Since(bound)
 		if err != nil {
 			return nil, err
 		}
@@ -2576,7 +2585,8 @@ func (d *Duck) QueryContext(ctx context.Context, query string, args ...any) (que
 	done = d.begin(ctx, query)
 	rows, err = db.QueryContext(ctx, query, args...)
 	done(err)
-	metrics.DuckDBStatement.Observe(time.Since(started).Seconds())
+	profile.Execute = time.Since(started)
+	metrics.DuckDBStatement.Observe(profile.Execute.Seconds())
 	if err != nil {
 		return nil, err
 	}

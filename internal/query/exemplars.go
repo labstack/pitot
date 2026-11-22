@@ -118,7 +118,11 @@ func (e *Executor) Exemplars(ctx context.Context, req ExemplarRequest) (Exemplar
 			if total := time.Since(started); total >= slowDrilldown {
 				slog.Info("slow exemplar request", "panel_id", req.PanelID, "kind", req.Kind, "indexed", stages.indexed,
 					"total_ms", total.Milliseconds(), "admission_ms", stages.admission.Milliseconds(),
-					"ranking_ms", stages.ranking.Milliseconds(), "summaries_ms", stages.summaries.Milliseconds(), "error", err)
+					"ranking_ms", stages.ranking.Milliseconds(), "ranking_wait_ms", stages.read.Wait.Milliseconds(),
+					"ranking_bind_ms", stages.read.Bind.Milliseconds(), "ranking_execute_ms", stages.read.Execute.Milliseconds(),
+					"cached_batches", stages.read.CachedBatches, "tail_batches", stages.read.TailBatches,
+					"tail_spans", stages.read.TailSpans, "tail_pruned", stages.read.Pruned,
+					"summaries_ms", stages.summaries.Milliseconds(), "error", err)
 			}
 		}()
 		if err != nil {
@@ -411,6 +415,8 @@ const slowDrilldown = time.Second
 type drilldownStages struct {
 	indexed                       bool
 	admission, ranking, summaries time.Duration
+	// read profiles the ranking statement.
+	read queryrows.ReadProfile
 }
 
 type drilldownStagesKey struct{}
@@ -442,7 +448,7 @@ func (e *Executor) indexedExemplars(ctx context.Context, w queryrows.Window, pan
 	stages.indexed = true
 	// Failed and timed-out rankings are recorded too: they are the slow ones.
 	started := time.Now()
-	ids, err := e.rankTraces(ctx, w)
+	ids, err := e.rankTraces(queryrows.WithReadProfile(ctx, &stages.read), w)
 	stages.ranking = time.Since(started)
 	metrics.RecordDrilldownStage("ranking", stages.ranking.Seconds())
 	if err != nil {

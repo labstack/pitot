@@ -286,6 +286,15 @@ func (d *Duck) traceExemplarSource(ctx context.Context, db snapshotSQL, batches 
 		return `SELECT namespace,service,trace_id,start_time,start_unix_nano,duration,has_error FROM (SELECT coalesce(namespace,'') AS namespace,coalesce(service,'') AS service,trace_id,start_time,start_unix_nano,end_unix_nano-start_unix_nano AS duration,
  CASE WHEN status='STATUS_CODE_ERROR' THEN 1 ELSE 0 END AS has_error FROM (` + cleanSource("spans", d.snapshotSource("spans", raw, batches)) + `) WHERE ` + windowPredicate("start_time", w) + ` AND trace_id<>'') WHERE true` + scope.String() + threshold
 	}
+	tailSpans := 0
+	for _, b := range raw {
+		tailSpans += b.Spans
+	}
+	threshold := ""
+	if p := queryrows.ReadProfileFrom(ctx); p != nil {
+		p.CachedBatches, p.TailBatches, p.TailSpans = len(cachedIDs), len(raw), tailSpans
+		defer func() { p.Pruned = threshold != "" }()
+	}
 	if len(cachedIDs) == 0 {
 		return tail(""), nil
 	}
@@ -302,11 +311,6 @@ func (d *Duck) traceExemplarSource(ctx context.Context, db snapshotSQL, batches 
 	}
 	cached := `SELECT namespace,service,trace_id,make_timestamp_ns(start_unix_nano)::TIMESTAMPTZ_NS AS start_time,start_unix_nano,duration,has_error FROM read_trace_exemplars WHERE batch_id IN (SELECT unnest([` + idsSQL(cachedIDs) + `]))` +
 		fmt.Sprintf(" AND minute>=%d AND minute<=%d", startMinute, endMinute) + scope.String() + ` AND (` + strings.Join(ranges, " OR ") + `)`
-	tailSpans := 0
-	for _, b := range raw {
-		tailSpans += b.Spans
-	}
-	threshold := ""
 	if len(raw) > 0 && tailSpans >= d.tracePruneSpans {
 		var traces, failed, duration int64
 		if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT count(*),coalesce(min(score)[1],0),coalesce(min(score)[2],0) FROM (SELECT max([has_error::BIGINT,duration]) AS score FROM (%s) GROUP BY namespace,trace_id ORDER BY score DESC LIMIT %d)`, cached+" AND in_full", traceExemplarDepth)).Scan(&traces, &failed, &duration); err != nil {

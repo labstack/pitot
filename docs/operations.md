@@ -236,7 +236,10 @@ Diagnose slow trace drill-downs (`POST /api/queries/exemplars`) by stage:
   not covered yet. Ranking scans them raw, so a large value with slow `ranking`
   points at read-cache lag rather than retained data.
 - An exemplar run that takes a second or more logs `slow exemplar request` at
-  info level with the same stage breakdown in milliseconds.
+  info level with the same stage breakdown in milliseconds. It splits ranking
+  into the wait for a connection, snapshot binding and statement execution, and
+  reports its source: cached batches, raw tail batches and their spans, and
+  whether a cached threshold pruned the tail.
 
 Run Pitot under a supervisor that restarts it on exit: Docker or Compose with
 `restart: unless-stopped` (`--restart unless-stopped`), systemd with
