@@ -319,6 +319,11 @@ func TestFailedBatchCacheTransactionPublishesNoContributions(t *testing.T) {
 	if err := CreateCacheTables(d.DB); err != nil {
 		t.Fatal(err)
 	}
+	// The failed file backs off before its retry; skip the wait.
+	if _, ok := d.cacheLeadFailures["atomic"]; !ok {
+		t.Fatal("failed file has no backoff")
+	}
+	d.cacheLeadFailures = nil
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -856,6 +861,48 @@ func TestReadCacheBlamesOnlyFilesThatFailAlone(t *testing.T) {
 	}
 	if !markers["fresh-11"] {
 		t.Fatalf("fresh files stopped caching: %v", markers)
+	}
+}
+
+// Through the worker: a file failing alone backs off by itself, so its
+// failures neither back the worker off nor keep newer files uncached.
+func TestReadCacheWorkerCachesFreshFilesPastAFailingFile(t *testing.T) {
+	d, repo := newBatchCacheTest(t)
+	at := int64(0)
+	commit := func(id string) {
+		at++
+		if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: id, Spans: []telemetry.Span{{TraceID: id, StartUnixNanos: at, EndUnixNanos: at + 1, IngestedAt: at}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit("bad")
+	if err := os.Remove(filepath.Join(d.repository.Parquet.BatchPath("bad"), "spans.parquet")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); d.runReadCacheLoop(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	// Each fresh file arrives after the failing file has retried, and backed
+	// off, a few times; the worker must still cache it within a second or two.
+	for i := range 3 {
+		time.Sleep(3 * time.Second)
+		id := fmt.Sprintf("fresh-%d", i)
+		commit(id)
+		deadline := time.Now().Add(2500 * time.Millisecond)
+		for {
+			var n int
+			if err := d.DB.QueryRow(`SELECT count(*) FROM read_batches WHERE batch_id=?`, id).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if n == 1 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s not cached past a failing file", id)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 }
 

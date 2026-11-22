@@ -260,14 +260,17 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 		}
 	}
 	// A failed file due for retry leads, oldest first, before the oldest
-	// file the last pass left.
+	// file the last pass left, but never two passes running: the worker's own
+	// backoff after a failed retry is never shorter than the file's, so a
+	// retry would otherwise be due at every wake and newer files never run.
 	lead, retrying := d.cacheBlocked, false
 	for _, b := range batches {
-		if _, failed := d.cacheLeadFailures[b.ID]; failed && eligible(b) {
+		if _, failed := d.cacheLeadFailures[b.ID]; failed && eligible(b) && !d.cacheRetried {
 			lead, retrying = b.ID, true
 			break
 		}
 	}
+	d.cacheRetried = retrying
 	d.cacheBlocked = ""
 	for _, b := range batches {
 		if lead != "" && b.ID == lead && eligible(b) {
@@ -283,7 +286,8 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 	if !retrying || lead == "" {
 		leading, freshRows := len(pending), 0
 		for i := len(batches) - 1; i >= 0 && len(pending) < readCacheBatchLimit; i-- {
-			if batches[i].ID == lead || !eligible(batches[i]) {
+			// A failed file runs only as a retry, alone.
+			if _, failed := d.cacheLeadFailures[batches[i].ID]; failed || batches[i].ID == lead || !eligible(batches[i]) {
 				continue
 			}
 			rows := batches[i].Spans + batches[i].Logs + batches[i].Metrics
@@ -322,6 +326,10 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 	rows, err = d.cacheBatches(ctx, pending, stale)
 	// Only a file that failed alone is blamed: a failed lead with company is
 	// due at once and retries alone, so an innocent lead costs one pass.
+	// A pass of one file is that file's alone, led or not.
+	if lead == "" && len(pending) == 1 {
+		lead = pending[0].ID
+	}
 	switch {
 	case lead == "":
 	case err == nil:

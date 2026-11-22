@@ -36,6 +36,7 @@ type Duck struct {
 	// pass failed. Protected by cacheGate.
 	cacheBlocked      string
 	cacheLeadFailures map[string]cacheLeadFailure
+	cacheRetried      bool // the last pass was a failed file's retry
 	backgroundOnce    sync.Once
 	backgroundSlots   chan struct{}
 	// fatal carries the first error after which DuckDB refuses all work until
