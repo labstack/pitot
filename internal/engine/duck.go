@@ -32,13 +32,15 @@ type Duck struct {
 	readPressure     readpressure.Signal
 	cachePassStarted bool // protected by cacheGate
 	// cacheBlocked is the oldest file the last read-cache pass left; the
-	// next pass takes it first. cacheLeadFailures holds each file whose lead
-	// pass failed. Protected by cacheGate.
-	cacheBlocked      string
-	cacheLeadFailures map[string]cacheLeadFailure
-	cacheRetried      bool // the last pass was a failed file's retry
-	backgroundOnce    sync.Once
-	backgroundSlots   chan struct{}
+	// next pass takes it first. cacheFailures holds each file that failed
+	// alone; cacheSuspects, the files of a failed pass not yet narrowed to
+	// one. Protected by cacheGate.
+	cacheBlocked    string
+	cacheFailures   map[string]cacheFailure
+	cacheSuspects   []string
+	cacheRetried    bool // the last pass was a failed file's retry
+	backgroundOnce  sync.Once
+	backgroundSlots chan struct{}
 	// fatal carries the first error after which DuckDB refuses all work until
 	// the process restarts. The query cache is rebuildable from Parquet.
 	fatal           chan error

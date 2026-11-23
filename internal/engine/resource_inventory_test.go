@@ -282,7 +282,7 @@ func TestResourceInventoryAtomicSignalAndMarkerFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The failed file backs off before its retry; skip the wait.
-			d.cacheLeadFailures = nil
+			d.cacheFailures = nil
 			for range 2 {
 				if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 					t.Fatal(err)
