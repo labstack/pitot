@@ -3,7 +3,7 @@ module github.com/labstack/pitot
 go 1.27.4
 
 require (
-	cel.dev/cel-go v0.33.2
+	cel.dev/cel-go v0.33.4
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20261116152133-344d21fcc1bc
 	github.com/alexedwards/scs/v2 v2.9.0
@@ -15,14 +15,14 @@ require (
 	github.com/klauspost/compress v1.20.4
 	github.com/labstack/echo/v5 v5.4.6
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/parquet-go/parquet-go v0.32.0
+	github.com/parquet-go/parquet-go v0.32.1
 	github.com/pressly/goose/v3 v3.30.1
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/wneessen/go-mail v0.8.2
 	github.com/zeebo/xxh3 v1.1.0
 	go.opentelemetry.io/proto/otlp v1.11.1
-	golang.org/x/net v0.62.0
+	golang.org/x/net v0.63.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.50.0
