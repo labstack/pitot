@@ -229,8 +229,9 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 	// leads within as many passes as there are older files.
 	//
 	// A failed pass of several files rolls all of them back and names none.
-	// Its files then run in halves, alone, until the failing one fails alone:
-	// about log2(64) passes, while the rest cache as their halves succeed.
+	// Its files then run in halves, alone, until each failing one fails
+	// alone: about log2(64) passes per failing file, while the rest cache as
+	// their halves succeed.
 	// A file that fails alone is left out of every pass until its retry time,
 	// so it neither retries every second nor takes newer files down with it.
 	// Its record ends when it caches or leaves the catalog.
@@ -261,24 +262,26 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 			selected++
 		}
 	}
-	// Suspects run before anything else, and without stale removals, so a
-	// failure narrows them; a vanished or cached suspect drops out.
-	suspects := []telemetry.BatchMetadata{}
-	for _, id := range d.cacheSuspects {
-		for _, b := range batches {
-			if b.ID == id && eligible(b) {
-				suspects = append(suspects, b)
-				break
+	// Suspect groups run first, one per pass, alone and without stale
+	// removals, so a failure narrows them; a cached, vanished or cooling
+	// suspect drops out of its group.
+	var suspects []telemetry.BatchMetadata
+	for len(d.cacheSuspects) > 0 && len(suspects) == 0 {
+		for _, id := range d.cacheSuspects[0] {
+			if i := slices.IndexFunc(batches, func(b telemetry.BatchMetadata) bool { return b.ID == id }); i >= 0 && eligible(batches[i]) {
+				suspects = append(suspects, batches[i])
 			}
 		}
+		if len(suspects) == 0 {
+			d.cacheSuspects = d.cacheSuspects[1:]
+		}
 	}
-	var rest []telemetry.BatchMetadata
+	half := (len(suspects) + 1) / 2
 	if len(suspects) > 0 {
-		half := (len(suspects) + 1) / 2
 		for _, b := range suspects[:half] {
 			add(b)
 		}
-		rest, stale = suspects[half:], nil
+		stale = nil
 		d.cacheRetried = false
 	} else {
 		// A failed file due for retry leads, oldest first, before the oldest
@@ -334,7 +337,6 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 		}
 	}
 	if len(pending) == 0 && len(stale) == 0 {
-		d.cacheSuspects = nil
 		return 0, false, nil
 	}
 	didWork = true
@@ -348,19 +350,30 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 	}
 	d.cachePassStarted = true
 	rows, err = d.cacheBatches(ctx, pending, stale)
+	// A group's failed half becomes a group of its own, ahead of the rest of
+	// its group; files leave a group as they cache or fail alone.
+	failedAlone := err != nil && ctx.Err() == nil && len(pending) == 1
 	switch {
-	case err == nil:
-		// The failing suspect is among the rest, unless the failure passed.
-		d.cacheSuspects = batchIDs(rest)
+	case ctx.Err() != nil:
+	case err == nil || failedAlone:
+		if len(suspects) > 0 {
+			d.cacheSuspects = slices.Delete(d.cacheSuspects, 0, 1)
+			if rest := suspects[half:]; len(rest) > 0 {
+				d.cacheSuspects = slices.Insert(d.cacheSuspects, 0, batchIDs(rest))
+			}
+		}
+	case len(suspects) > 0:
+		d.cacheSuspects = slices.Delete(d.cacheSuspects, 0, 1)
+		d.cacheSuspects = slices.Insert(d.cacheSuspects, 0, batchIDs(suspects[:half]), batchIDs(suspects[half:]))
+	default:
+		d.cacheSuspects = [][]string{batchIDs(pending)}
+	}
+	if err == nil {
 		for _, b := range pending {
 			delete(d.cacheFailures, b.ID)
 		}
-	case ctx.Err() != nil:
-		d.cacheSuspects = batchIDs(suspects)
-	case len(pending) > 1:
-		d.cacheSuspects = batchIDs(pending)
-	case len(pending) == 1:
-		d.cacheSuspects = nil
+	}
+	if failedAlone {
 		if d.cacheFailures == nil {
 			d.cacheFailures = map[string]cacheFailure{}
 		}

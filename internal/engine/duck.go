@@ -33,11 +33,11 @@ type Duck struct {
 	cachePassStarted bool // protected by cacheGate
 	// cacheBlocked is the oldest file the last read-cache pass left; the
 	// next pass takes it first. cacheFailures holds each file that failed
-	// alone; cacheSuspects, the files of a failed pass not yet narrowed to
-	// one. Protected by cacheGate.
+	// alone; cacheSuspects, groups of a failed pass's files not yet narrowed
+	// to one. Protected by cacheGate.
 	cacheBlocked    string
 	cacheFailures   map[string]cacheFailure
-	cacheSuspects   []string
+	cacheSuspects   [][]string
 	cacheRetried    bool // the last pass was a failed file's retry
 	backgroundOnce  sync.Once
 	backgroundSlots chan struct{}
