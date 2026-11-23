@@ -910,11 +910,8 @@ func TestReadCacheIsolatesFailingFilesInHalves(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for id := range markers {
-				if !strings.HasPrefix(id, "fresh-") {
-					continue
-				}
-				if !markers[id] {
+			for fresh := int64(101); fresh <= at; fresh++ {
+				if id := fmt.Sprintf("fresh-%d", fresh); !markers[id] {
 					t.Fatalf("%s uncached", id)
 				}
 			}
