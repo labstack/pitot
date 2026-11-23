@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -320,10 +321,10 @@ func TestFailedBatchCacheTransactionPublishesNoContributions(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The failed file backs off before its retry; skip the wait.
-	if _, ok := d.cacheLeadFailures["atomic"]; !ok {
+	if _, ok := d.cacheFailures["atomic"]; !ok {
 		t.Fatal("failed file has no backoff")
 	}
-	d.cacheLeadFailures = nil
+	d.cacheFailures = nil
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -798,30 +799,31 @@ func TestReadCacheFailedLeadBacksOffAndRunsAlone(t *testing.T) {
 		}
 	}
 	d.cacheBlocked = "older"
-	d.cacheLeadFailures = map[string]cacheLeadFailure{"failed": {failures: 1, retry: time.Now().Add(time.Hour)}}
+	d.cacheFailures = map[string]cacheFailure{"failed": {failures: 1, retry: time.Now().Add(time.Hour)}}
 	_, backlog, err := d.refreshReadCaches(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	markers, err := batchMarkers(t.Context(), d.DB)
-	if err != nil || !markers["older"] || !markers["newer"] || markers["failed"] || backlog || len(d.cacheLeadFailures) != 1 || d.cacheBlocked != "" {
-		t.Fatalf("backoff pass: %v backlog=%v failed=%v blocked=%q %v", markers, backlog, d.cacheLeadFailures, d.cacheBlocked, err)
+	if err != nil || !markers["older"] || !markers["newer"] || markers["failed"] || backlog || len(d.cacheFailures) != 1 || d.cacheBlocked != "" {
+		t.Fatalf("backoff pass: %v backlog=%v failed=%v blocked=%q %v", markers, backlog, d.cacheFailures, d.cacheBlocked, err)
 	}
 	if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: "newest", Spans: []telemetry.Span{{TraceID: "newest", StartUnixNanos: 9, EndUnixNanos: 10, IngestedAt: 9}}}); err != nil {
 		t.Fatal(err)
 	}
-	d.cacheLeadFailures["failed"] = cacheLeadFailure{failures: 1, retry: time.Now().Add(-time.Second)}
+	d.cacheFailures["failed"] = cacheFailure{failures: 1, retry: time.Now().Add(-time.Second)}
 	if _, err := d.RefreshReadCaches(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	markers, err = batchMarkers(t.Context(), d.DB)
-	if err != nil || !markers["failed"] || markers["newest"] || len(d.cacheLeadFailures) != 0 || d.cacheBlocked != "newest" {
-		t.Fatalf("retry pass: %v failed=%v blocked=%q %v", markers, d.cacheLeadFailures, d.cacheBlocked, err)
+	if err != nil || !markers["failed"] || markers["newest"] || len(d.cacheFailures) != 0 || d.cacheBlocked != "newest" {
+		t.Fatalf("retry pass: %v failed=%v blocked=%q %v", markers, d.cacheFailures, d.cacheBlocked, err)
 	}
 }
 
-// A lead whose pass fails retries alone; only failing alone earns a backoff,
-// so an innocent lead is never held back and fresh files keep caching.
+// A lead whose pass fails is narrowed with its company; only failing alone
+// earns a backoff, so an innocent lead is never held back and fresh files
+// keep caching.
 func TestReadCacheBlamesOnlyFilesThatFailAlone(t *testing.T) {
 	d, repo := newBatchCacheTest(t)
 	at := int64(0)
@@ -839,7 +841,7 @@ func TestReadCacheBlamesOnlyFilesThatFailAlone(t *testing.T) {
 	}
 	commit("good")
 	d.cacheBlocked = "good"
-	// The innocent lead fails beside the bad files, then caches alone.
+	// The innocent lead fails beside the bad files, then caches as its half succeeds.
 	for pass := range 12 {
 		commit(fmt.Sprintf("fresh-%02d", pass))
 		_, _ = d.RefreshReadCaches(t.Context())
@@ -851,16 +853,76 @@ func TestReadCacheBlamesOnlyFilesThatFailAlone(t *testing.T) {
 	if !markers["good"] || markers["bad-a"] || markers["bad-b"] {
 		t.Fatalf("markers=%v", markers)
 	}
-	if _, ok := d.cacheLeadFailures["good"]; ok || len(d.cacheLeadFailures) != 2 {
-		t.Fatalf("failure records %v", d.cacheLeadFailures)
+	if _, ok := d.cacheFailures["good"]; ok || len(d.cacheFailures) != 2 {
+		t.Fatalf("failure records %v", d.cacheFailures)
 	}
-	for id, f := range d.cacheLeadFailures {
+	for id, f := range d.cacheFailures {
 		if f.failures < 1 || !f.retry.After(time.Now()) {
 			t.Fatalf("%s failure record %+v", id, f)
 		}
 	}
 	if !markers["fresh-11"] {
 		t.Fatalf("fresh files stopped caching: %v", markers)
+	}
+}
+
+// Fresh files that fail beside other fresh files, with nothing older to
+// lead, are each narrowed to alone in halves, and no failing file rejoins a
+// pass with fresh files on the way; the rest cache once it is found.
+func TestReadCacheIsolatesFailingFilesInHalves(t *testing.T) {
+	for _, bad := range [][]string{{"file-5"}, {"file-1", "file-6"}, {"file-0", "file-3"}} {
+		t.Run(strings.Join(bad, ","), func(t *testing.T) {
+			d, repo := newBatchCacheTest(t)
+			for i := range 8 {
+				id := fmt.Sprintf("file-%d", i)
+				at := int64(i + 1)
+				if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: id, Spans: []telemetry.Span{{TraceID: id, StartUnixNanos: at, EndUnixNanos: at + 1, IngestedAt: at}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, id := range bad {
+				if err := os.Remove(filepath.Join(d.repository.Parquet.BatchPath(id), "spans.parquet")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A fresh file arrives before every pass. Only the first pass may
+			// fail with fresh files in it: every later failure is a suspect
+			// group's, so no failing file rejoins fresh files on the way.
+			freshFailures, at := 0, int64(100)
+			for pass := 0; pass < 12 && (len(d.cacheSuspects) > 0 || pass == 0); pass++ {
+				at++
+				if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: fmt.Sprintf("fresh-%d", at), Spans: []telemetry.Span{{TraceID: fmt.Sprint(at), StartUnixNanos: at, EndUnixNanos: at + 1, IngestedAt: at}}}); err != nil {
+					t.Fatal(err)
+				}
+				suspecting := len(d.cacheSuspects) > 0
+				if _, err := d.RefreshReadCaches(t.Context()); err != nil && !suspecting {
+					freshFailures++
+				}
+			}
+			if len(d.cacheSuspects) != 0 || freshFailures != 1 {
+				t.Fatalf("suspects=%v failed passes with fresh files=%d", d.cacheSuspects, freshFailures)
+			}
+			// The fresh files that waited cache in one pass.
+			if _, err := d.RefreshReadCaches(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			markers, err := batchMarkers(t.Context(), d.DB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for fresh := int64(101); fresh <= at; fresh++ {
+				if id := fmt.Sprintf("fresh-%d", fresh); !markers[id] {
+					t.Fatalf("%s uncached", id)
+				}
+			}
+			for i := range 8 {
+				id := fmt.Sprintf("file-%d", i)
+				_, failed := d.cacheFailures[id]
+				if isBad := slices.Contains(bad, id); markers[id] == isBad || failed != isBad {
+					t.Fatalf("%s cached=%v failed=%v: %v", id, markers[id], failed, d.cacheFailures)
+				}
+			}
+		})
 	}
 }
 
