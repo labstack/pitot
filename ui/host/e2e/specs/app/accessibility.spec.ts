@@ -83,6 +83,9 @@ test("dashboard controls satisfy WCAG AA", async ({ page, request }, info) => {
   for (const name of ["Spec", "Data"]) {
     await page.locator("[data-version-history]").getByRole("button", { name, exact: true }).click();
     await settle(page);
+    // Opening a long section scrolls the drawer, leaving the version list under
+    // its sticky header, where axe cannot see the background. Scan from the top.
+    await page.locator('[role="dialog"]').evaluate(node => { node.scrollTop = 0; });
     await scan(page, info, `history-${name}`, '[role="dialog"]');
   }
 });
