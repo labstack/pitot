@@ -14,6 +14,10 @@ export default defineConfig({
   site: SITE,
   trailingSlash: "never",
   build: { format: "preserve" },
+  // Starlight forced this strategy before 0.43. Components such as CopyButton
+  // style a child's root through a `class` prop, which only the class-based
+  // strategies scope to the parent.
+  scopedStyleStrategy: "where",
   // Reserved local-development port, beside the runtime's own 7520; no reverse
   // proxy is used.
   server: { port: 7521 },
