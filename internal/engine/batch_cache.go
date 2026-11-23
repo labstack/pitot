@@ -222,24 +222,92 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 	}
 	metrics.ReadCachePendingBatches.Set(float64(pendingCount))
 	metrics.ReadCachePendingSpans.Set(float64(pendingSpans))
+	// Newest files go first, so a file left behind would wait for a pass with
+	// nothing newer pending, which steady ingest never leaves: a large
+	// compacted output stayed uncached, and scanned raw by every ranking, for
+	// minutes. The oldest file a pass leaves leads the next one, so every file
+	// leads within as many passes as there are older files.
+	//
+	// A lead whose pass failed next runs alone. Failing alone, it is left out
+	// of every pass until its retry time, so it neither retries every second
+	// nor takes newer files down with it. Its record ends when it caches or
+	// leaves the catalog.
+	now := time.Now()
+	for id := range d.cacheLeadFailures {
+		if markers[id] || !active[id] {
+			delete(d.cacheLeadFailures, id)
+		}
+	}
+	cooling := func(id string) bool {
+		f, ok := d.cacheLeadFailures[id]
+		return ok && now.Before(f.retry)
+	}
+	eligible := func(b telemetry.BatchMetadata) bool {
+		return !markers[b.ID] && !d.pendingCacheTransfer(b.ID, true) && !cooling(b.ID)
+	}
+	waiting := pendingCount
+	for _, b := range batches {
+		if cooling(b.ID) && !markers[b.ID] && b.Spans+b.Logs+b.Metrics > 0 {
+			waiting--
+		}
+	}
 	pending := []telemetry.BatchMetadata{}
-	pendingRows, selected := 0, 0
-	for i := len(batches) - 1; i >= 0; i-- {
-		if !markers[batches[i].ID] && !d.pendingCacheTransfer(batches[i].ID, true) {
+	selected := 0
+	add := func(b telemetry.BatchMetadata) {
+		pending = append(pending, b)
+		if b.Spans+b.Logs+b.Metrics > 0 {
+			selected++
+		}
+	}
+	// A failed file due for retry leads, oldest first, before the oldest
+	// file the last pass left, but never two passes running: the worker's own
+	// backoff after a failed retry is never shorter than the file's, so a
+	// retry would otherwise be due at every wake and newer files never run.
+	lead, retrying := d.cacheBlocked, false
+	for _, b := range batches {
+		if _, failed := d.cacheLeadFailures[b.ID]; failed && eligible(b) && !d.cacheRetried {
+			lead, retrying = b.ID, true
+			break
+		}
+	}
+	d.cacheRetried = retrying
+	d.cacheBlocked = ""
+	for _, b := range batches {
+		if lead != "" && b.ID == lead && eligible(b) {
+			add(b)
+			break
+		}
+	}
+	if len(pending) == 0 {
+		lead = ""
+	}
+	// The lead is extra: newer files keep their own budget, so a run of large
+	// old leads, as in a cold rebuild, never holds back fresh data.
+	if !retrying || lead == "" {
+		leading, freshRows := len(pending), 0
+		for i := len(batches) - 1; i >= 0 && len(pending) < readCacheBatchLimit; i-- {
+			// A failed file runs only as a retry, alone.
+			if _, failed := d.cacheLeadFailures[batches[i].ID]; failed || batches[i].ID == lead || !eligible(batches[i]) {
+				continue
+			}
 			rows := batches[i].Spans + batches[i].Logs + batches[i].Metrics
 			// A complete file is indivisible. Admit one oversized file to make
 			// progress, otherwise bound new work by rows as well as file count.
-			if len(pending) > 0 && pendingRows+rows > readCacheRowBudget {
+			if len(pending) > leading && freshRows+rows > readCacheRowBudget {
 				break
 			}
-			pending = append(pending, batches[i])
-			pendingRows += rows
-			if rows > 0 {
-				selected++
-			}
-			if len(pending) == readCacheBatchLimit {
-				break
-			}
+			add(batches[i])
+			freshRows += rows
+		}
+	}
+	picked := make(map[string]bool, len(pending))
+	for _, b := range pending {
+		picked[b.ID] = true
+	}
+	for _, b := range batches {
+		if _, failed := d.cacheLeadFailures[b.ID]; !picked[b.ID] && eligible(b) && !failed {
+			d.cacheBlocked = b.ID
+			break
 		}
 	}
 	if len(pending) == 0 && len(stale) == 0 {
@@ -256,8 +324,38 @@ func (d *Duck) refreshReadCaches(ctx context.Context) (rows int64, backlog bool,
 	}
 	d.cachePassStarted = true
 	rows, err = d.cacheBatches(ctx, pending, stale)
+	// Only a file that failed alone is blamed: a failed lead with company is
+	// due at once and retries alone, so an innocent lead costs one pass.
+	// A pass of one file is that file's alone, led or not.
+	if lead == "" && len(pending) == 1 {
+		lead = pending[0].ID
+	}
+	switch {
+	case lead == "":
+	case err == nil:
+		delete(d.cacheLeadFailures, lead)
+	case ctx.Err() == nil:
+		if d.cacheLeadFailures == nil {
+			d.cacheLeadFailures = map[string]cacheLeadFailure{}
+		}
+		f := d.cacheLeadFailures[lead]
+		f.retry = time.Now()
+		if len(pending) == 1 {
+			f.failures++
+			f.retry = f.retry.Add(min(time.Second<<min(f.failures-1, 6), time.Minute))
+		}
+		d.cacheLeadFailures[lead] = f
+	}
 
-	return rows, err == nil && selected < pendingCount, err
+	// A file waiting out its retry is not backlog: the worker need not spin.
+	return rows, err == nil && selected < waiting, err
+}
+
+// cacheLeadFailure is a file whose lead pass failed: it is left out of every
+// pass until retry, then runs alone. failures counts failed solo passes.
+type cacheLeadFailure struct {
+	failures int
+	retry    time.Time
 }
 
 func (d *Duck) cacheBatches(ctx context.Context, batches []telemetry.BatchMetadata, stale []string) (int64, error) {

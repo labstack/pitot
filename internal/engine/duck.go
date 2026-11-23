@@ -31,8 +31,14 @@ import (
 type Duck struct {
 	readPressure     readpressure.Signal
 	cachePassStarted bool // protected by cacheGate
-	backgroundOnce   sync.Once
-	backgroundSlots  chan struct{}
+	// cacheBlocked is the oldest file the last read-cache pass left; the
+	// next pass takes it first. cacheLeadFailures holds each file whose lead
+	// pass failed. Protected by cacheGate.
+	cacheBlocked      string
+	cacheLeadFailures map[string]cacheLeadFailure
+	cacheRetried      bool // the last pass was a failed file's retry
+	backgroundOnce    sync.Once
+	backgroundSlots   chan struct{}
 	// fatal carries the first error after which DuckDB refuses all work until
 	// the process restarts. The query cache is rebuildable from Parquet.
 	fatal           chan error
