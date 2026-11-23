@@ -105,7 +105,7 @@ e2e-image-check:
 
 # Generate Linux baselines with the same image and shared-memory setting as CI.
 e2e-linux-baselines:
-    docker run --rm --ipc=host -v "{{justfile_directory()}}:/work" -v /work/ui/host/node_modules -w /work mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf bash -euc 'npm install --global bun@1.4.2; cd ui/host; bun install --frozen-lockfile; cd ../..; node scripts/playwright-image-check.mjs; cd ui/host; bun run e2e --project visual --update-snapshots'
+    docker run --rm --ipc=host -v "{{justfile_directory()}}:/work" -v /work/ui/host/node_modules -w /work mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579 bash -euc 'npm install --global bun@1.4.2; cd ui/host; bun install --frozen-lockfile; cd ../..; node scripts/playwright-image-check.mjs; cd ui/host; bun run e2e --project visual --update-snapshots'
 
 # Refresh all six landing captures and export the app lockup as logo.svg.
 landing-captures:

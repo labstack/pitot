@@ -1,1 +1,0 @@
-import{n as e}from"./settings-CgctBDwQ.js";var t=e;export{t as component};
