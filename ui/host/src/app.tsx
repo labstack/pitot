@@ -192,7 +192,7 @@ function Session() {
   }, [ready, routeThreadID, threadID]);
 
   function submit(event: FormEvent) { event.preventDefault(); void send(input); }
-  function stop() { stoppingRef.current = true; agent.abortRun(); endRun(); draftsRef.current.delete(threadID); }
+  function stop() { stoppingRef.current = true; endRun(); agent.abortRun(); draftsRef.current.delete(threadID); }
   function retry() { if (!running && agent.messages.some((message) => message.role === "user")) void run(); }
   function openChat(prompt?: string, options?: TurnOptions) {
     if (!agentAvailable) return;

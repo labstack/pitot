@@ -1,7 +1,8 @@
-// One canvas serves every text measurement. A missing 2D context is not
-// cached, so a canvas that becomes available later is still used.
-let context: CanvasRenderingContext2D | null = null;
-const canvasContext = () => context ??= document.createElement("canvas").getContext("2d");
+// One canvas serves every text measurement. Its 2D context is looked up on
+// each use, which returns the same context object and still honours a
+// getContext that is replaced later.
+let canvas: HTMLCanvasElement | undefined;
+const canvasContext = () => (canvas ??= document.createElement("canvas")).getContext("2d");
 
 /** Width of text in a CSS font, or undefined where canvas text metrics are unavailable. */
 export function measureText(text: string, font: string): number | undefined {

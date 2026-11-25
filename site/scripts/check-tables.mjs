@@ -11,7 +11,6 @@
 // which the plugin never runs at all and every table ships bare. Reading the
 // emitted HTML is the only vantage point from which that is visible.
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { htmlFiles } from "./html-files.mjs";
 
