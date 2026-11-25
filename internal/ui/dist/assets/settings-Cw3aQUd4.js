@@ -1,1 +1,0 @@
-import{n as e}from"./settings-MaIi3YUS.js";var t=e;export{t as component};

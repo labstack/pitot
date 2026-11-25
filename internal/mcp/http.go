@@ -20,35 +20,18 @@ const (
 	legacySessionLimit   = 8
 )
 
-// messageBody is a buffered request body that remembers its decoded message,
-// so the authorization, rate-limit and transport layers decode it once.
-type messageBody struct {
-	*bytes.Reader
-	message jsonrpc.Message
-	err     error
-}
-
-func (*messageBody) Close() error { return nil }
-
 // ReadHTTPMessage preserves the body for the SDK and excludes JSON-RPC batches.
-// Repeated calls on a request whose buffered body is still unread return the
-// first decode result.
 func ReadHTTPMessage(r *http.Request) (jsonrpc.Message, error) {
 	if r.Body == nil {
 		return nil, io.EOF
-	}
-	if buffered, ok := r.Body.(*messageBody); ok && int64(buffered.Len()) == buffered.Size() {
-		return buffered.message, buffered.err
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, mcp.DefaultMaxRequestBodyBytes))
 	if err != nil {
 		return nil, err
 	}
 	_ = r.Body.Close()
-	buffered := &messageBody{Reader: bytes.NewReader(body)}
-	buffered.message, buffered.err = jsonrpc.DecodeMessage(body)
-	r.Body = buffered
-	return buffered.message, buffered.err
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	return jsonrpc.DecodeMessage(body)
 }
 
 func WriteHTTPMessageError(w http.ResponseWriter, err error) {

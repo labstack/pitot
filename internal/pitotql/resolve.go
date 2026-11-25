@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -46,32 +45,8 @@ type vocabulary struct {
 	buckets   func() []string
 }
 
-// currentVocabulary snapshots the registry once per compilation: each list is
-// built on first use and shared by later reads in the same compilation. The
-// results are clipped so a caller's append never writes into the shared array.
 func currentVocabulary() vocabulary {
-	var mu sync.Mutex
-	type signalColumns struct {
-		fields []query.Field
-		ok     bool
-	}
-	columns := map[string]signalColumns{}
-	return vocabulary{
-		columns: func(signal string) ([]query.Field, bool) {
-			mu.Lock()
-			defer mu.Unlock()
-			c, cached := columns[signal]
-			if !cached {
-				fields, ok := query.SignalColumns(signal)
-				c = signalColumns{slices.Clip(fields), ok}
-				columns[signal] = c
-			}
-			return c.fields, c.ok
-		},
-		measures:  sync.OnceValue(func() []query.MeasureSpec { return slices.Clip(query.MeasureSpecs()) }),
-		functions: sync.OnceValue(func() []string { return slices.Clip(query.FilterFunctionNames()) }),
-		buckets:   sync.OnceValue(func() []string { return slices.Clip(query.BucketNames()) }),
-	}
+	return vocabulary{query.SignalColumns, query.MeasureSpecs, query.FilterFunctionNames, query.BucketNames}
 }
 
 type resolver struct {

@@ -2,7 +2,7 @@ import { DataState, Notice, PageHeader, defaultContentWidths } from "@labstack/u
 import type { Message } from "@ag-ui/client";
 import { ActionIcon, Box, Button, Container, Group, Paper, Stack, Table, Text, Textarea, Title, Tooltip, Typography, UnstyledButton } from "@mantine/core";
 import { Check, Copy, PaperPlaneTilt, Stop, CaretDown, CaretRight, ArrowDown } from "@phosphor-icons/react";
-import { lazy, Suspense, useEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toolFailureLabel, usePitotApp, useDashboardReceipts } from "./app-context";
@@ -146,37 +146,29 @@ export function ChatPage() {
   const receipts = useDashboardReceipts(messages);
   const lastSent = messages.filter((message) => message.role === "user").at(-1)?.id;
   const { scrollRef, contentRef, turnRef, showJump, jumpToLatest } = useTurnAnchor<HTMLDivElement, HTMLDivElement>(lastSent);
-  const appViews = useMemo(() => chatAppViews(messages), [messages]);
-  const failures = useMemo(() => toolFailures(messages), [messages]);
-  const visibleMessages = useMemo(() => messages.filter((message) => {
+  if (!agentAvailable) return <Container size="sm" py={96}><Paper withBorder radius="md" p={{ base: "xl", sm: 40 }}><Stack gap="md"><Text fw={700} size="xs" tt="uppercase" lts="0.12em">Optional capability</Text><PageHeader title="Chat" description="Chat is not configured" /><Text c="dimmed">Add an AI provider key to enable chat. Telemetry ingest, dashboards, traces, logs, and metrics remain available without it.</Text><Button component="a" href="/dashboards" variant="light" mt="sm">Open dashboards</Button></Stack></Paper></Container>;
+  const appViews = chatAppViews(messages);
+  const failures = toolFailures(messages);
+  const visibleMessages = messages.filter((message) => {
     if(appViews.duplicates.has(message.id)) return false;
     if(message.role === "tool") return failures.has(message.id);
     if(message.role === "assistant") return !message.toolCalls?.length && typeof message.content === "string" && message.content.trim().length > 0;
     if(message.role === "activity") return message.activityType === "mcp-app" || message.activityType === "agent-outcome";
     return message.role === "user";
-  }), [messages, appViews, failures]);
+  });
   // Tool receipts can finish before the buffered final answer. Only text in
   // the current user turn replaces its running status.
-  const { hasFinalText, answer } = useMemo(() => {
-    const turnStart = messages.findIndex(message => message.id === lastSent);
-    const current = messages.slice(turnStart + 1);
-    return {
-      hasFinalText: current.some(message => message.role === "assistant" && !message.toolCalls?.length && typeof message.content === "string" && message.content.length > 0),
-      answer: current.filter(message => message.role === "assistant" && !message.toolCalls?.length && typeof message.content === "string" && message.content.trim().length > 0).at(-1),
-    };
-  }, [messages, lastSent]);
+  const turnStart = messages.findIndex(message => message.id === lastSent);
+  const hasFinalText = messages.slice(turnStart + 1).some(message => message.role === "assistant" && !message.toolCalls?.length && typeof message.content === "string" && message.content.length > 0);
+  const answer = messages.slice(turnStart + 1).filter(message => message.role === "assistant" && !message.toolCalls?.length && typeof message.content === "string" && message.content.trim().length > 0).at(-1);
   // Keep each turn's wrapper when the next question arrives so iframe views
   // retain their mounted state as the current turn becomes history.
-  const turns = useMemo(() => {
-    const grouped: Array<{ id: string; messages: Message[] }> = [];
-    for (const message of visibleMessages) {
-      if (message.role === "user" || grouped.length === 0) grouped.push({ id: message.id, messages: [] });
-      grouped.at(-1)!.messages.push(message);
-    }
-    if (grouped.length === 0) grouped.push({ id: "draft", messages: [] });
-    return grouped;
-  }, [visibleMessages]);
-  if (!agentAvailable) return <Container size="sm" py={96}><Paper withBorder radius="md" p={{ base: "xl", sm: 40 }}><Stack gap="md"><Text fw={700} size="xs" tt="uppercase" lts="0.12em">Optional capability</Text><PageHeader title="Chat" description="Chat is not configured" /><Text c="dimmed">Add an AI provider key to enable chat. Telemetry ingest, dashboards, traces, logs, and metrics remain available without it.</Text><Button component="a" href="/dashboards" variant="light" mt="sm">Open dashboards</Button></Stack></Paper></Container>;
+  const turns: Array<{ id: string; messages: Message[] }> = [];
+  for (const message of visibleMessages) {
+    if (message.role === "user" || turns.length === 0) turns.push({ id: message.id, messages: [] });
+    turns.at(-1)!.messages.push(message);
+  }
+  if (turns.length === 0) turns.push({ id: "draft", messages: [] });
   const renderMessage = (message: Message) => failures.has(message.id)
     ? <ToolFailures key={message.id} failures={failures.get(message.id)!} />
     : <Box key={message.id}>
