@@ -441,11 +441,7 @@ func verifyOrder(path string, s *Signal, expected int) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	file, err := parquet.OpenFile(f, info.Size())
+	file, err := openParquet(f)
 	if err != nil {
 		return err
 	}

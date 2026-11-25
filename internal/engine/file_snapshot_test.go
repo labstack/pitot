@@ -479,7 +479,7 @@ func TestBroadSelectionRetainsCapturedFilesAcrossPublicationAndRetirement(t *tes
 	captured := repo.Parquet.BatchMetadata()
 	pin := d.pinParquet()
 	defer d.unpinParquet(pin)
-	source := d.snapshotSource("spans", captured, captured)
+	source := d.physicalSource("spans", captured)
 	if err := repo.Commit(t.Context(), telemetrystore.Batch{ID: "new-after-capture", Spans: []telemetry.Span{{TraceID: "new", StartUnixNanos: at.UnixNano(), IngestedAt: at.Add(time.Hour).UnixNano()}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +487,7 @@ func TestBroadSelectionRetainsCapturedFilesAcrossPublicationAndRetirement(t *tes
 	if err := d.DB.QueryRow("SELECT count(*) FROM (" + source + ")").Scan(&count); err != nil || count != 64 {
 		t.Fatalf("captured rows=%d: %v", count, err)
 	}
-	narrow := d.snapshotSource("spans", captured[:1], captured)
+	narrow := d.physicalSource("spans", captured[:1])
 	if strings.Contains(narrow, "*.batch") {
 		t.Fatal("narrow selection used glob")
 	}
@@ -542,7 +542,7 @@ func TestBatchFilenameIdentityWithRelativeDataDir(t *testing.T) {
 		t.Fatalf("relative cache batch identity=%d: %v", count, err)
 	}
 	active := repo.Parquet.BatchMetadata()
-	if err := d.DB.QueryRow(`SELECT count(*) FROM (` + d.snapshotSource("logs", active, active) + `)`).Scan(&count); err != nil || count != readCacheBatchLimit {
+	if err := d.DB.QueryRow(`SELECT count(*) FROM (` + d.physicalSource("logs", active) + `)`).Scan(&count); err != nil || count != readCacheBatchLimit {
 		t.Fatalf("relative glob identity=%d: %v", count, err)
 	}
 }

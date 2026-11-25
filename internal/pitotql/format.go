@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/labstack/pitot/internal/query"
 	"github.com/labstack/pitot/internal/sqlscan"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -151,16 +150,9 @@ func Format(ctx context.Context, p query.Parser, stored query.Spec, opts Options
 	return f, nil, nil
 }
 
-func groupedNumber(n int) string {
-	s := strconv.Itoa(n)
-	for i := len(s) - 3; i > 0; i -= 3 {
-		s = s[:i] + "," + s[i:]
-	}
-	return s
-}
 func editableReason(text string) string {
 	bound := func(n, max int, unit string) string {
-		return fmt.Sprintf("formatted text is %s %s; the editor accepts %s", groupedNumber(n), unit, groupedNumber(max))
+		return fmt.Sprintf("formatted text is %s %s; the editor accepts %s", query.Grouped(int64(n)), unit, query.Grouped(int64(max)))
 	}
 	if n := utf8.RuneCountInString(text); n > maxTextRunes {
 		return bound(n, maxTextRunes, "characters")

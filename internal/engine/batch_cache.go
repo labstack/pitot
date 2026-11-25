@@ -437,8 +437,11 @@ func (d *Duck) cacheBatches(ctx context.Context, batches []telemetry.BatchMetada
 		physical := strings.Replace(d.physicalSource(signal, selected), "SELECT ", "SELECT filename AS __pitot_filename,", 1)
 		return strings.Replace(cleanSource(signal, physical), "SELECT\n", "SELECT "+d.batchIDColumn(signal, "__pitot_filename")+" AS batch_id,\n", 1)
 	}
+	sources := make(map[string]string, len(telemetry.Signals))
 	for _, s := range telemetry.Signals {
-		if rows := source(s.Name); rows != "" {
+		rows := source(s.Name)
+		sources[s.Name] = rows
+		if rows != "" {
 			clock := s.Clock()
 			// Materialize only this pass's resource-seconds once. Inventory can
 			// fold their exact extrema without decoding every raw point again.
@@ -457,12 +460,12 @@ func (d *Duck) cacheBatches(ctx context.Context, batches []telemetry.BatchMetada
 			}
 		}
 	}
-	if metrics := source("metrics"); metrics != "" {
+	if metrics := sources["metrics"]; metrics != "" {
 		if err := exec(`INSERT INTO read_metric_names SELECT DISTINCT batch_id,name FROM (` + metrics + `)`); err != nil {
 			return 0, err
 		}
 	}
-	if spans := source("spans"); spans != "" {
+	if spans := sources["spans"]; spans != "" {
 		// Rank each new partition's spans once; retained rows are never read.
 		if err := exec(`CREATE OR REPLACE TEMP TABLE cache_new_exemplar_spans AS SELECT row_number() OVER () AS id,batch_id,coalesce(namespace,'') AS namespace,coalesce(service,'') AS service,
    ` + minuteSQL("start_unix_nano") + ` AS minute,trace_id,start_unix_nano,end_unix_nano-start_unix_nano AS duration,CASE WHEN status='STATUS_CODE_ERROR' THEN 1 ELSE 0 END AS has_error
@@ -497,6 +500,18 @@ func timeLiteral(t time.Time) string {
 }
 func windowPredicate(column string, w queryrows.Window) string {
 	return column + ">=" + timeLiteral(w.Start) + " AND " + column + "<" + timeLiteral(w.End)
+}
+
+// scopePredicate restricts rows to the window's namespace and service, if set.
+func scopePredicate(w queryrows.Window) string {
+	scope := ""
+	if w.Namespace != "" {
+		scope += " AND namespace=" + sqlLiteral(w.Namespace)
+	}
+	if w.Service != "" {
+		scope += " AND service=" + sqlLiteral(w.Service)
+	}
+	return scope
 }
 func (d *Duck) aggregateSources(ctx context.Context, db snapshotSQL, batches []telemetry.BatchMetadata, w queryrows.Window, inventory, traces bool, sources map[string]string) error {
 	markers, err := batchMarkers(ctx, db)

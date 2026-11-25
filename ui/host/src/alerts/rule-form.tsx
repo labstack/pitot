@@ -3,7 +3,7 @@ import { Box,  Autocomplete, Button, Group, Menu, Modal, NumberInput, Stack, Swi
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useDiscard } from "../dashboards/discard";
-import { emailOptionsKey, getEmailOptions, listServices, type Rule, type RuleDraft } from "./api";
+import { emailOptionsKey, getEmailOptions, servicesQuery, type Rule, type RuleDraft } from "./api";
 import { percentMistake } from "./values";
 
 /** Starters for the documented variables (site docs: reference/alert-expressions). */
@@ -68,7 +68,7 @@ export function RuleForm({ rule, onClose, onSave }: { rule?: Rule; onClose(): vo
   const recipients = recipientsChanged ? recipientsProblem(draft.email_recipients ?? [], email.data?.max_recipients ?? 10) : undefined;
   const ready = draft.name.trim() !== "" && draft.expression.trim() !== "" && !headers && !recipients;
   // A misspelled service saves, but would never fire; say so without blocking.
-  const services = useQuery({ queryKey: ["alerting", "services"], queryFn: ({ signal }) => listServices(signal), staleTime: 60_000, retry: false });
+  const services = useQuery({ ...servicesQuery, staleTime: 60_000, retry: false });
   const service = draft.service?.trim() ?? "";
   const unseen = service !== "" && services.data !== undefined && !services.data.includes(service);
   const mistake = percentMistake(draft.expression);

@@ -23,7 +23,7 @@ func TestTracesDiagnosisWording(t *testing.T) {
 	if r := got[0]; r.Status != StatusEmpty || r.Diagnosis != want {
 		t.Fatalf("diagnosis %q, want %q", r.Diagnosis, want)
 	}
-	if got := grouped(1234567); got != "1,234,567" {
+	if got := Grouped(1234567); got != "1,234,567" {
 		t.Fatalf("grouped = %q", got)
 	}
 }

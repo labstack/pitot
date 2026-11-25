@@ -516,7 +516,7 @@ func TestResolveUserDowngradesRoleWhenIdPAdminGroupRemoved(t *testing.T) {
 	if got.Role != appauth.RoleViewer {
 		t.Fatalf("role after admin group removal = %q, want viewer", got.Role)
 	}
-	stored, err := users.GetByID(user.ID)
+	stored, err := users.GetByIDContext(t.Context(), user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +554,7 @@ func TestResolveUserDeniesGroupOverageWhenGroupPolicyConfigured(t *testing.T) {
 	if !strings.Contains(err.Error(), "group") {
 		t.Fatalf("denial reason = %q, want it to name the group claim so operators can fix the IdP", err)
 	}
-	stored, err := users.GetByID(user.ID)
+	stored, err := users.GetByIDContext(t.Context(), user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -640,7 +640,7 @@ func TestResolveUserSkipsRoleReconciliationForSuspendedUser(t *testing.T) {
 	claims := oidcClaims{Subject: "subject-1", Email: user.Email, EmailVerified: &verified, Groups: []string{"trusted"}}
 	_, _, _ = handler.resolveUser(t.Context(), "https://issuer.example", claims, requestSource{})
 
-	stored, err := users.GetByID(user.ID)
+	stored, err := users.GetByIDContext(t.Context(), user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

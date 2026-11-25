@@ -75,7 +75,7 @@ func TestUserSecurityRoutesAllowChangesWithAnotherActiveAdmin(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("security change = %d: %s", rec.Code, rec.Body.String())
 			}
-			updated, err := s.users.GetByID(target.ID)
+			updated, err := s.users.GetByIDContext(t.Context(), target.ID)
 			if err != nil || updated.AuthVersion != target.AuthVersion+1 {
 				t.Fatalf("security change = %+v %v", updated, err)
 			}
@@ -217,7 +217,7 @@ func TestUserPatchRoutes(t *testing.T) {
 			t.Fatalf("PATCH %s %s = %d: %s", tc.path, tc.body, rec.Code, rec.Body.String())
 		}
 	}
-	updated, err := s.users.GetByID(target.ID)
+	updated, err := s.users.GetByIDContext(t.Context(), target.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestUserPatchRoutesRejectWrongFields(t *testing.T) {
 			t.Fatalf("PATCH %s %s = %d: %s", tc.path, tc.body, rec.Code, rec.Body.String())
 		}
 	}
-	unchanged, err := s.users.GetByID(admin.ID)
+	unchanged, err := s.users.GetByIDContext(t.Context(), admin.ID)
 	if err != nil || unchanged.Email != admin.Email || unchanged.DisplayName != admin.DisplayName || unchanged.Role != admin.Role || unchanged.Status != admin.Status || unchanged.AuthVersion != admin.AuthVersion {
 		t.Fatalf("invalid requests changed user: %+v %v", unchanged, err)
 	}
@@ -379,7 +379,7 @@ func TestStatusRouteSuspensionBlocksSessionsAndSignIn(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("suspend = %d: %s", rec.Code, rec.Body.String())
 	}
-	updated, err := s.users.GetByID(target.ID)
+	updated, err := s.users.GetByIDContext(t.Context(), target.ID)
 	if err != nil || updated.Status != auth.UserStatusSuspended || updated.AuthVersion != target.AuthVersion+1 {
 		t.Fatalf("suspended = %+v %v", updated, err)
 	}

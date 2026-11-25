@@ -5,7 +5,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import { Responsive, verticalCompactor, type Layout } from "react-grid-layout";
 import type { DashboardSpec, DashboardTime, Panel, PanelResult, Selection, VarValue } from "../../../panels/types";
 import type { AnnotationsResponse } from "../../../panels/annotations";
-import { ApiError, patchDashboard, replaceDashboard } from "./api";
+import { ApiError, dashboardKey, patchDashboard, replaceDashboard, type DashboardRecord } from "./api";
 import { interpolate } from "../../../panels/variables";
 import { panelHandlers } from "./panel-handlers";
 import { PanelCard } from "./panel-card";
@@ -15,7 +15,7 @@ import type { TurnOptions } from "../app-context";
 
 /** Grid rows are 40 px with 12 px gaps; internal/dashboard/layout.go packs
  *  with the same row unit. */
-import { rowHeight, margin, pixels, defaultRows } from "./layout";
+import { rowHeight, margin, pixels, defaultRows, useWindowHeight } from "./layout";
 
 const PanelEditor = lazy(() => import("./panel-editor"));
 
@@ -29,6 +29,8 @@ export type GridProps = {
   zoomed?: boolean; onZoomReset?(): void; onWiden?(): void; onRangePending?(id: string, pending: boolean): void;
   shortcutScope?: string; onShortcuts?(): void; overlayOpen?: boolean; returnViewFocus?(panel?: string): HTMLElement | undefined;
 };
+
+const layoutOf = (spec: DashboardSpec) => spec.panels.map((p) => ({ i: p.id, x: p.grid?.x ?? 0, y: p.grid?.y ?? 0, w: p.grid?.w ?? 6, h: p.grid?.h ?? defaultRows(p) }));
 
 let panelIdCounter = 0;
 function newPanelId(panels: Panel[]): string {
@@ -45,15 +47,10 @@ export function PanelGrid({ dashboardId, version, spec, vars, results, fetching,
   // background refresh cannot silently rebase a draft over another edit.
   // An undefined panel adds one.
   const [panelEdit, setPanelEdit] = useState<{ panel?: Panel; spec: DashboardSpec; version: number }>();
-  const [layout, setLayout] = useState(() => spec.panels.map((p) => ({ i: p.id, x: p.grid?.x ?? 0, y: p.grid?.y ?? 0, w: p.grid?.w ?? 6, h: p.grid?.h ?? defaultRows(p) })));
-  useEffect(() => { setLayout(spec.panels.map((p) => ({ i: p.id, x: p.grid?.x ?? 0, y: p.grid?.y ?? 0, w: p.grid?.w ?? 6, h: p.grid?.h ?? defaultRows(p) }))); }, [spec]);
-  const [windowHeight, setWindowHeight] = useState(() => window.innerHeight);
+  const [layout, setLayout] = useState(() => layoutOf(spec));
+  useEffect(() => { setLayout(layoutOf(spec)); }, [spec]);
+  const windowHeight = useWindowHeight();
   const [copyFeedback, setCopyFeedback] = useState<string>();
-  useEffect(() => {
-    const resize = () => setWindowHeight(window.innerHeight);
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
-  }, []);
   const container = useRef<HTMLDivElement>(null);
   const menus = useRef(new Map<string, HTMLButtonElement>());
   const fullscreenMenu = useRef<HTMLButtonElement>(null);
@@ -102,15 +99,16 @@ export function PanelGrid({ dashboardId, version, spec, vars, results, fetching,
 
   const dirty = useMemo(() => spec.panels.some((p) => { const g = layout.find((l) => l.i === p.id); return g && (g.x !== p.grid?.x || g.y !== p.grid?.y || g.w !== p.grid?.w || g.h !== p.grid?.h); }), [layout, spec]);
   const withLayout = (panels: Panel[]) => ({ ...spec, panels: panels.map((p) => { const g = layout.find((l) => l.i === p.id); return g ? { ...p, grid: { x: g.x, y: g.y, w: g.w, h: g.h } } : p; }) });
+  const saved = (record: DashboardRecord) => { client.setQueryData(dashboardKey(dashboardId), record); };
   const save = useMutation({
     mutationFn: () => replaceDashboard(dashboardId, withLayout(spec.panels), version, "Edited layout"),
-    onSuccess: (record) => { client.setQueryData(["dashboard", dashboardId], record); },
+    onSuccess: saved,
   });
   const remove = useMutation({
     mutationFn: (id: string) => dirty
       ? replaceDashboard(dashboardId, withLayout(spec.panels.filter((p) => p.id !== id)), version, "Removed a panel and saved layout")
       : patchDashboard(dashboardId, [{ op: "remove_panel", id }], version, "Removed a panel"),
-    onSuccess: (record) => { client.setQueryData(["dashboard", dashboardId], record); },
+    onSuccess: saved,
   });
   const duplicate = useMutation({
     mutationFn: (panel: Panel) => {
@@ -122,15 +120,14 @@ export function PanelGrid({ dashboardId, version, spec, vars, results, fetching,
       }
       return patchDashboard(dashboardId, [{ op: "add_panel", after: panel.id, panel: copy }], version, "Duplicated a panel");
     },
-    onSuccess: (record) => { client.setQueryData(["dashboard", dashboardId], record); },
+    onSuccess: saved,
   });
-  useEffect(() => { if (!editing) { save.reset(); remove.reset(); duplicate.reset(); } }, [editing]);
+  const resetMutations = () => { save.reset(); remove.reset(); duplicate.reset(); };
+  useEffect(() => { if (!editing) resetMutations(); }, [editing]);
   const loadLatest = () => {
-    save.reset();
-    remove.reset();
-    duplicate.reset();
+    resetMutations();
     onEditExit?.();
-    void client.invalidateQueries({ queryKey: ["dashboard", dashboardId] });
+    void client.invalidateQueries({ queryKey: dashboardKey(dashboardId) });
   };
   const copyLink = async (panelId: string) => {
     const url = new URL(window.location.href);

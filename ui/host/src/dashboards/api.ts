@@ -1,3 +1,4 @@
+import { queryOptions } from "@tanstack/react-query";
 import type { Result, TraceDetail } from "../../../contracts";
 import type { DrillTarget } from "./drill-state";
 import type { AnnotationBody, AnnotationsResponse } from "../../../panels/annotations";
@@ -25,6 +26,8 @@ export type Operation =
 export type QueryBody = { dashboard: DashboardSpec; panels?: string[]; time?: DashboardTime; vars?: Record<string, VarValue>; widths?: Record<string, number>; compare?: boolean };
 
 export const dashboardsKey = ["dashboards"] as const;
+export const dashboardKey = (id: string | undefined) => ["dashboard", id] as const;
+export const dashboardVersionsKey = (id: string) => ["dashboard-versions", id] as const;
 export const dashboardsStaleTime = 30_000;
 
 export async function request<T>(url: string, init?: RequestInit & { json?: unknown }): Promise<T> {
@@ -89,7 +92,8 @@ export async function queryPanels(body: QueryBody, signal?: AbortSignal, onResul
   }
 }
 export const createDashboard = (spec: DashboardSpec) => request<DashboardRecord>("/api/dashboards", { method: "POST", json: { spec } });
-export const getTelemetrySchema = (signal?: AbortSignal) => request<TelemetrySchema>("/api/telemetry/schema", { signal });
+const getTelemetrySchema = (signal?: AbortSignal) => request<TelemetrySchema>("/api/telemetry/schema", { signal });
+export const telemetrySchemaQuery = queryOptions({ queryKey: ["telemetry-schema"], queryFn: ({ signal }) => getTelemetrySchema(signal), staleTime: 60_000, retry: false });
 export const queryAnnotations = (body: AnnotationBody, signal?: AbortSignal) => request<AnnotationsResponse>("/api/annotations/query", { method: "POST", json: body, signal });
 export const resolveVariables = (body: Omit<QueryBody, "panels" | "widths" | "compare">, signal?: AbortSignal) =>
   request<{ options: Record<string, { value: string; count?: number }[]> }>("/api/queries/variables/resolve", { method: "POST", json: body, signal }).then((r) => r.options);

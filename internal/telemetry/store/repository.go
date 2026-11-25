@@ -97,7 +97,7 @@ func (r *Repository) cleanupCompactionArtifacts() error {
 	if err := os.RemoveAll(filepath.Join(r.root, "compaction")); err != nil {
 		return err
 	}
-	return syncDirectory(r.root)
+	return telemetry.SyncDirectory(r.root)
 }
 
 func (r *Repository) Close() error {
@@ -157,7 +157,7 @@ func (r *Repository) cleanupRetired() error {
 		}
 	}
 	if removed {
-		cleanupErr = errors.Join(cleanupErr, syncDirectory(r.Parquet.BatchesDir()))
+		cleanupErr = errors.Join(cleanupErr, telemetry.SyncDirectory(r.Parquet.BatchesDir()))
 	}
 	return cleanupErr
 }

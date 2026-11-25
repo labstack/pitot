@@ -32,5 +32,7 @@ export const createRule = (rule: RuleDraft) => request<Rule>("/api/alerting/rule
 export const replaceRule = (id: string, rule: RuleDraft) => request<Rule>(rulePath(id), { method: "PUT", json: rule });
 export const deleteRule = (id: string) => request<unknown>(rulePath(id), { method: "DELETE" });
 /** Services with telemetry in the last hour. */
-export const listServices = (signal?: AbortSignal) => request<{ services?: { value: string }[] }>("/api/telemetry/schema?window=1h", { signal }).then(r => (r.services ?? []).map(s => s.value));
+const listServices = (signal?: AbortSignal) => request<{ services?: { value: string }[] }>("/api/telemetry/schema?window=1h", { signal }).then(r => (r.services ?? []).map(s => s.value));
+/** Key and fetch for listServices; each caller keeps its own caching options. */
+export const servicesQuery = { queryKey: ["services", "1h"] as const, queryFn: ({ signal }: { signal?: AbortSignal }) => listServices(signal) };
 export const testRule = (id: string) => request<RuleTest>(`${rulePath(id)}/test`, { method: "POST" });

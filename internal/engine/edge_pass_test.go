@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// createEdgePassBucketsSQL materializes a pass's relationship buckets for tests.
+var createEdgePassBucketsSQL = "CREATE TEMP TABLE edge_pass_buckets AS " + edgePassBucketsSelectSQL
+
 func TestEdgePassBucketsPreserveRepairCounts(t *testing.T) {
 	db := openTestDuck(t)
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)

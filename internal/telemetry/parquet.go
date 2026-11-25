@@ -46,7 +46,7 @@ const (
 // publication from being indistinguishable from a hung ingest path.
 const commitPublishWait = 60 * time.Second
 
-var syncPublishedDirectory = syncDirectory
+var syncPublishedDirectory = SyncDirectory
 
 type BatchMetadata struct {
 	Version           uint32 `json:"version"`
@@ -347,7 +347,7 @@ func (p *ParquetStore) CommitBatch(ctx context.Context, metadata *BatchMetadata,
 		// it even if the fsync fails; see the rename below.
 		p.installBatch(adopted)
 		*metadata = adopted.metadata
-		return syncDirectory(p.batchesDir)
+		return SyncDirectory(p.batchesDir)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -387,7 +387,7 @@ func (p *ParquetStore) CommitBatch(ctx context.Context, metadata *BatchMetadata,
 	if err := writes.Wait(); err != nil {
 		return err
 	}
-	if err := syncDirectory(stage); err != nil {
+	if err := SyncDirectory(stage); err != nil {
 		return err
 	}
 	prepared, err := loadStoredBatch(stage)
@@ -413,7 +413,7 @@ func (p *ParquetStore) CommitBatch(ctx context.Context, metadata *BatchMetadata,
 			// The staged copy lost the race and is now unreferenced; drop it
 			// rather than leaving it to accumulate until the next open.
 			removeErr := os.RemoveAll(stage)
-			if err := syncDirectory(p.batchesDir); err != nil {
+			if err := SyncDirectory(p.batchesDir); err != nil {
 				return errors.Join(err, removeErr)
 			}
 			if err := p.registerBatch(final); err != nil {
@@ -433,7 +433,7 @@ func (p *ParquetStore) CommitBatch(ctx context.Context, metadata *BatchMetadata,
 	p.setBatchLocked(metadata.ID, prepared)
 	p.mu.Unlock()
 	*metadata = prepared.metadata
-	return syncDirectory(p.batchesDir)
+	return SyncDirectory(p.batchesDir)
 }
 
 // alreadyPublished replaces metadata with the published batch's, when known,
@@ -923,7 +923,7 @@ func (p *ParquetStore) PrepareReplacement(dir string, metadata BatchMetadata) er
 	if err := writeJSONFile(filepath.Join(dir, "metadata.json"), metadata); err != nil {
 		return err
 	}
-	return syncDirectory(dir)
+	return SyncDirectory(dir)
 }
 
 // PublishReplacement validates a prepared compacted batch and swaps it for its
@@ -1044,7 +1044,7 @@ func (p *ParquetStore) ensureSchemaBatch() error {
 	if err := writeParquet(filepath.Join(stage, "metrics.parquet"), Metrics, []Metric{}, parquetPageSize); err != nil {
 		return err
 	}
-	if err := syncDirectory(stage); err != nil {
+	if err := SyncDirectory(stage); err != nil {
 		return err
 	}
 	// Rename cannot replace a non-empty directory, so the old one is removed
@@ -1056,7 +1056,7 @@ func (p *ParquetStore) ensureSchemaBatch() error {
 	if err := os.Rename(stage, final); err != nil {
 		return err
 	}
-	return syncDirectory(p.batchesDir)
+	return SyncDirectory(p.batchesDir)
 }
 
 func (p *ParquetStore) loadBatches() error {
@@ -1542,7 +1542,17 @@ func writeBytesFile(path string, data []byte) error {
 	return f.Close()
 }
 
-func syncDirectory(dir string) error {
+// openParquet opens an already opened file's Parquet footer at its current size.
+func openParquet(f *os.File, options ...parquet.FileOption) (*parquet.File, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return parquet.OpenFile(f, info.Size(), options...)
+}
+
+// SyncDirectory fsyncs a directory so entries created or renamed in it are durable.
+func SyncDirectory(dir string) error {
 	f, err := os.Open(dir)
 	if err != nil {
 		return err

@@ -130,7 +130,7 @@ func quarantineBatch(root, id string, validate func(string) error) (string, erro
 	if err := os.Rename(source, destination); err != nil {
 		return "", fmt.Errorf("quarantine telemetry batch %s: %w", id, err)
 	}
-	if err := syncDirectory(batchesDir); err != nil {
+	if err := telemetry.SyncDirectory(batchesDir); err != nil {
 		return destination, fmt.Errorf("quarantined telemetry batch %s at %s but could not sync the directory: %w", id, destination, err)
 	}
 	return destination, nil

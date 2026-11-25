@@ -234,9 +234,7 @@ func (h *OIDCHandler) Callback(c *echo.Context) error {
 	if returnTo == "" {
 		returnTo = "/"
 	}
-	auditCtx, cancel := appauth.DetachedWriteContext(ctx)
-	defer cancel()
-	if err := h.audit.Record(auditCtx, appauth.AuditEvent{ActorUserID: user.ID, EventType: "login.succeeded", Outcome: "success", TargetType: "identity", TargetID: identity.ID, RemoteIP: c.RealIP(), UserAgent: c.Request().UserAgent(), Metadata: map[string]any{"mode": "oidc", "issuer": idToken.Issuer}}); err != nil {
+	if err := recordRequestAudit(c, h.audit, appauth.AuditEvent{ActorUserID: user.ID, EventType: "login.succeeded", Outcome: "success", TargetType: "identity", TargetID: identity.ID, Metadata: map[string]any{"mode": "oidc", "issuer": idToken.Issuer}}); err != nil {
 		slog.Error("OIDC audit write failed", "err", err)
 	}
 	return c.Redirect(http.StatusFound, returnTo)
@@ -478,9 +476,7 @@ func (h *OIDCHandler) provisionRole(groups []string) appauth.Role {
 }
 
 func (h *OIDCHandler) oidcDenied(c *echo.Context, reason string) error {
-	ctx, cancel := appauth.DetachedWriteContext(c.Request().Context())
-	defer cancel()
-	if err := h.audit.Record(ctx, appauth.AuditEvent{EventType: "oidc.denied", Outcome: "denied", RemoteIP: c.RealIP(), UserAgent: c.Request().UserAgent(), Metadata: map[string]any{"reason": reason}}); err != nil {
+	if err := recordRequestAudit(c, h.audit, appauth.AuditEvent{EventType: "oidc.denied", Outcome: "denied", Metadata: map[string]any{"reason": reason}}); err != nil {
 		slog.Error("OIDC denial audit write failed", "err", err)
 	}
 	return echo.NewHTTPError(http.StatusUnauthorized, "OIDC login denied")

@@ -425,11 +425,17 @@ func (h *AuthHandler) recordAudit(c *echo.Context, event auth.AuditEvent) {
 }
 
 func (h *AuthHandler) writeAudit(c *echo.Context, event auth.AuditEvent) error {
+	return recordRequestAudit(c, h.audit, event)
+}
+
+// recordRequestAudit attributes event to the request's client and records it
+// on a context detached from request cancellation.
+func recordRequestAudit(c *echo.Context, audit *auth.AuditStore, event auth.AuditEvent) error {
 	event.RemoteIP = c.RealIP()
 	event.UserAgent = c.Request().UserAgent()
 	ctx, cancel := auth.DetachedWriteContext(c.Request().Context())
 	defer cancel()
-	return h.audit.Record(ctx, event)
+	return audit.Record(ctx, event)
 }
 
 func (h *AuthHandler) establishSession(c *echo.Context, user auth.User) error {

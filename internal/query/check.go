@@ -90,12 +90,19 @@ func (m *checkMemo) put(key [32]byte, entry memoEntry) {
 	m.entries[key] = entry
 }
 
-// memoKey hashes the variables, which every filter may reference, and the
-// panel fields Check reads, including the unit that infers a ranking
-// direction; titles, layout and other display options are left out.
-func memoKey(vars []Variable, p *Panel) [32]byte {
+// varsHash hashes the variables, which every filter may reference, once per
+// check so each panel's key reuses it.
+func varsHash(vars []Variable) [32]byte {
+	raw, _ := json.Marshal(vars)
+	return sha256.Sum256(raw)
+}
+
+// memoKey hashes the variables' hash and the panel fields Check reads,
+// including the unit that infers a ranking direction; titles, layout and other
+// display options are left out.
+func memoKey(vars [32]byte, p *Panel) [32]byte {
 	var input struct {
-		Vars                []Variable
+		Vars                [32]byte
 		ID, Viz, SQL, Split string
 		Better, Unit        string
 		Query               *Spec
@@ -125,7 +132,8 @@ func checkValidated(ctx context.Context, parser Parser, d *Dashboard, memo *chec
 	var problems Problems
 	checked := &Checked{AnnotationFilters: map[string][]AnnotationFilter{}, Filters: map[string][]Filter{}, VarFilters: map[string][]Filter{}, Measures: map[string][]Measure{}}
 	earlier := map[string]Variable{}
-	varsKey := memoKey(d.Variables, nil)
+	vars := varsHash(d.Variables)
+	varsKey := memoKey(vars, nil)
 	if entry, ok := memo.get(varsKey); ok {
 		checked.VarFilters = entry.vars
 		for _, v := range d.Variables {
@@ -159,7 +167,7 @@ func checkValidated(ctx context.Context, parser Parser, d *Dashboard, memo *chec
 	for i := range d.Panels {
 		p := &d.Panels[i]
 		path := fmt.Sprintf("panels[%d]", i)
-		key := memoKey(d.Variables, p)
+		key := memoKey(vars, p)
 		if entry, ok := memo.get(key); ok {
 			if entry.annotation != nil {
 				checked.AnnotationFilters[p.ID] = entry.annotation
@@ -199,6 +207,13 @@ func checkValidated(ctx context.Context, parser Parser, d *Dashboard, memo *chec
 				m.Rank = rankRule(*m, sig, better)
 			}
 
+			var sample Scope
+			if p.Viz == "health" || p.Viz == "service_map" {
+				sample = Scope{Vars: map[string]Value{}}
+				for name := range earlier {
+					sample.Vars[name] = Value{Values: []string{"check"}}
+				}
+			}
 			for j, expr := range p.Query.Where {
 				f, err := checkFilter(ctx, parser, sig, earlier, expr)
 				if err != nil {
@@ -229,10 +244,6 @@ func checkValidated(ctx context.Context, parser Parser, d *Dashboard, memo *chec
 				}
 
 				if p.Viz == "health" || p.Viz == "service_map" {
-					sample := Scope{Vars: map[string]Value{}}
-					for name := range earlier {
-						sample.Vars[name] = Value{Values: []string{"check"}}
-					}
 					if _, _, err := rollupFilterValue(f, sample); err != nil {
 						if isOperational(err) {
 							return nil, nil, err

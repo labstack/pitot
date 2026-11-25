@@ -158,6 +158,21 @@ func Validate(d *Dashboard) Problems {
 	return problems
 }
 
+// requestTime applies a request's time override to the dashboard's time. The
+// override inherits the dashboard's refresh when it sets none.
+func requestTime(base Time, override *Time) (Time, Problems) {
+	if override == nil {
+		return base, nil
+	}
+	t := *override
+	if t.Refresh == "" {
+		t.Refresh = base.Refresh
+	}
+	var problems Problems
+	validateTime(t, &problems)
+	return t, problems
+}
+
 func validateTime(t Time, problems *Problems) {
 	switch {
 	case t.Range != "" && (t.From != nil || t.To != nil):
@@ -387,14 +402,6 @@ func validatePanel(p *Panel, path string, vars map[string]Variable, problems *Pr
 	if p.Query != nil {
 		queryShapeVariables(p.Query, vars, path+".query", problems)
 	}
-}
-
-func mapKeys(vars map[string]Variable) []string {
-	out := make([]string, 0, len(vars))
-	for name := range vars {
-		out = append(out, name)
-	}
-	return out
 }
 
 func validateQuery(p *Panel, spec vizSpec, path string, problems *Problems) {

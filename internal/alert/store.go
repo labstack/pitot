@@ -158,7 +158,7 @@ func (s *Store) CreateRule(r Rule) (Rule, error) {
 func (s *Store) GetRule(id string) (Rule, error) {
 	ar, err := s.q.GetRule(context.Background(), id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Rule{}, fmt.Errorf("store: rule %q not found", id)
+		return Rule{}, fmt.Errorf("store: rule %q %w", id, ErrNotFound)
 	}
 	if err != nil {
 		return Rule{}, fmt.Errorf("store: get rule: %w", err)
@@ -196,7 +196,7 @@ func (s *Store) ListEnabledRules() ([]Rule, error) {
 func (s *Store) ReplaceRule(r Rule) (Rule, error) {
 	ar, err := s.q.ReplaceRule(context.Background(), ruleToReplaceParams(r))
 	if errors.Is(err, sql.ErrNoRows) {
-		return Rule{}, fmt.Errorf("store: rule %q not found", r.ID)
+		return Rule{}, fmt.Errorf("store: rule %q %w", r.ID, ErrNotFound)
 	}
 	if err != nil {
 		return Rule{}, fmt.Errorf("store: update rule: %w", err)
@@ -206,16 +206,12 @@ func (s *Store) ReplaceRule(r Rule) (Rule, error) {
 
 // DeleteRule deletes a rule by ID (cascades to alerts).
 func (s *Store) DeleteRule(id string) error {
-	// GetRule first to detect not-found (generated DeleteRule is :exec with no rows info).
-	_, err := s.q.GetRule(context.Background(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("store: rule %q: %w", id, ErrNotFound)
-	}
+	rows, err := s.q.DeleteRule(context.Background(), id)
 	if err != nil {
-		return fmt.Errorf("store: delete rule (pre-check): %w", err)
-	}
-	if err := s.q.DeleteRule(context.Background(), id); err != nil {
 		return fmt.Errorf("store: delete rule: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("store: rule %q: %w", id, ErrNotFound)
 	}
 	return nil
 }

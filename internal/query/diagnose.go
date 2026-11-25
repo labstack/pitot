@@ -132,7 +132,7 @@ func (e *Executor) explain(ctx context.Context, p *Panel, filters []Filter, scop
 		}
 		// Counts are of the signal's rows, so the message names them even
 		// where the traces viz lists traces of spans.
-		noun, matched := sig.name, grouped(recovered)
+		noun, matched := sig.name, Grouped(recovered)
 		message := fmt.Sprintf("No %s match the selected filters in this time range. Without %s, %s match.", noun, selection, matched)
 		if f.DisplayField != "" && (f.DisplayLiteral != "" || f.DisplayParam != "") {
 			message = fmt.Sprintf("No %s for %s in this time range. Without that filter, %s match.", noun, selection, matched)
@@ -150,20 +150,20 @@ func (e *Executor) explain(ctx context.Context, p *Panel, filters []Filter, scop
 			}
 			if n > 0 {
 				// The filter matches one type only; say which form finds the rest.
-				if strings.Contains(f.Expr, "'"+strings.ReplaceAll(f.DisplayLiteral, "'", "''")+"'") {
-					message += fmt.Sprintf(" %s %s store %s %s as a number; write the value without quotes, %s, to match them.", grouped(n), sig.name, f.DisplayField, f.DisplayLiteral, f.DisplayLiteral)
+				if strings.Contains(f.Expr, sqlString(f.DisplayLiteral)) {
+					message += fmt.Sprintf(" %s %s store %s %s as a number; write the value without quotes, %s, to match them.", Grouped(n), sig.name, f.DisplayField, f.DisplayLiteral, f.DisplayLiteral)
 				} else {
-					message += fmt.Sprintf(" %s %s store %s %s as text; quote the value, \"%s\", to match them.", grouped(n), sig.name, f.DisplayField, f.DisplayLiteral, f.DisplayLiteral)
+					message += fmt.Sprintf(" %s %s store %s %s as text; quote the value, \"%s\", to match them.", Grouped(n), sig.name, f.DisplayField, f.DisplayLiteral, f.DisplayLiteral)
 				}
 			}
 		}
 		return message
 	}
-	return fmt.Sprintf("%s %s are in this time range, but the filters together match none of them.", grouped(total), sig.name)
+	return fmt.Sprintf("%s %s are in this time range, but the filters together match none of them.", Grouped(total), sig.name)
 }
 
-// grouped writes a count, which is never negative, with thousands separators.
-func grouped(n int64) string {
+// Grouped writes a count, which is never negative, with thousands separators.
+func Grouped(n int64) string {
 	digits := strconv.FormatInt(n, 10)
 	var b strings.Builder
 	for i, d := range digits {
@@ -331,7 +331,7 @@ func (e *Executor) seenValues(ctx context.Context, sig *signal, f Filter, others
 			if value == "" {
 				value = `""`
 			}
-			parts = append(parts, fmt.Sprintf("%s (%s)", spoken(sig, f.EqField, value), grouped(n.Int64)))
+			parts = append(parts, fmt.Sprintf("%s (%s)", spoken(sig, f.EqField, value), Grouped(n.Int64)))
 			shown += n.Int64
 		case "rows":
 			total = n.Int64

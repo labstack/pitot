@@ -15,6 +15,7 @@ function check(html: string) {
   mkdirSync(join(root, "dist"));
   const script = join(root, "scripts/check-tables.mjs");
   copyFileSync(resolve(import.meta.dir, "../site/scripts/check-tables.mjs"), script);
+  copyFileSync(resolve(import.meta.dir, "../site/scripts/html-files.mjs"), join(root, "scripts/html-files.mjs"));
   writeFileSync(join(root, "dist/reference.html"), html);
   return Bun.spawnSync([process.execPath, script]);
 }

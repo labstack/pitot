@@ -168,17 +168,9 @@ func (e *Executor) exemplars(ctx context.Context, req ExemplarRequest, now time.
 	if p.Query == nil || p.Query.From == "metrics" {
 		return out, Problems{{Path: "panel_id", Message: "trace lineage needs a structured spans or logs panel"}}
 	}
-	t := d.Time
-	if req.Time != nil {
-		t = *req.Time
-		if t.Refresh == "" {
-			t.Refresh = d.Time.Refresh
-		}
-		var problems Problems
-		validateTime(t, &problems)
-		if len(problems) > 0 {
-			return out, problems
-		}
+	t, problems := requestTime(d.Time, req.Time)
+	if len(problems) > 0 {
+		return out, problems
 	}
 	override := p.Time
 	if req.Time != nil && req.Time.From != nil && req.Time.To != nil {

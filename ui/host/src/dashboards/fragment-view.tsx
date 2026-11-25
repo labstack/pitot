@@ -15,7 +15,7 @@ import { TraceDetailView } from "./trace/detail";
 import { useVariableOptions, type VariableResolver } from "./use-variables";
 import { useBrushZoom } from "./use-brush-zoom";
 import { drillSelection, panelHandlers } from "./panel-handlers";
-import { fragmentPanelHeight } from "./layout";
+import { fragmentPanelHeight, useWindowHeight } from "./layout";
 import { usePanelViewFocus } from "./use-panel-view-focus";
 const unavailableOptions: VariableResolver = async () => { throw new Error("Variable options unavailable"); };
 
@@ -75,12 +75,7 @@ export function FragmentView({ fragment, dark, onQuery, drillClient, resolveVari
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [hostFocused, onDisplayMode]);
-  const [windowHeight, setWindowHeight] = useState(() => window.innerHeight);
-  useEffect(() => {
-    const resize = () => setWindowHeight(window.innerHeight);
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
-  }, []);
+  const windowHeight = useWindowHeight();
   useEffect(() => {
     generation.current++;
     setShown(fragment); setVars(fragment.vars ?? {}); setTime(fragment.dashboard.time);

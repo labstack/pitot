@@ -284,7 +284,7 @@ func printField(f fieldName) string {
 	if column == "resource" && validPath(key) {
 		return "resource." + key
 	}
-	return column + "['" + strings.ReplaceAll(key, "'", "''") + "']"
+	return column + "[" + sqlString(key) + "]"
 }
 
 func validPath(s string) bool { return identifierPath.MatchString(s) }

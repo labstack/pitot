@@ -80,7 +80,7 @@ func (op browserUserOperation) target(id string) string {
 // assertUserUntouched fails unless a refused request left the target as it was.
 func assertUserUntouched(t *testing.T, s *scimServer, want auth.User, wantUsers int64) {
 	t.Helper()
-	got, err := s.users.GetByID(want.ID)
+	got, err := s.users.GetByIDContext(t.Context(), want.ID)
 	if err != nil {
 		t.Fatalf("target after refusal: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestSCIMManagesAccountsWhileBrowserRoutesRefuse(t *testing.T) {
 	apply(`{"op":"replace","path":"active","value":true}`)
 	apply(`{"op":"replace","path":"userName","value":"renamed@example.com"}`)
 
-	user, err := s.users.GetByID(created.ID)
+	user, err := s.users.GetByIDContext(t.Context(), created.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestLoginManagesAccountsWhileBrowserRoutesRefuse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("provision at login: %v", err)
 			}
-			if stored, err := users.GetByID(created.ID); err != nil || stored.Email != "newcomer@example.com" {
+			if stored, err := users.GetByIDContext(t.Context(), created.ID); err != nil || stored.Email != "newcomer@example.com" {
 				t.Fatalf("provisioned user = %+v err=%v", stored, err)
 			}
 		})

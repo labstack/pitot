@@ -8,7 +8,7 @@ import { formatPitotql, type Formatted } from "../explore/api";
 import { ExplorePage } from "../explore/page";
 import { uniquePanelID } from "../explore/save-dialog";
 import { defaultRange, type ExploreSearch } from "../explore/search";
-import { dashboardsKey, getDashboard, patchDashboard, replaceDashboard } from "./api";
+import { dashboardKey, dashboardsKey, dashboardVersionsKey, getDashboard, patchDashboard, replaceDashboard } from "./api";
 import { useDiscard } from "./discard";
 
 type PanelEditorProps = {
@@ -97,7 +97,7 @@ export default function PanelEditor({ dashboardId, version: openedVersion, spec:
     setConflict("loading");
     try {
       const record = await getDashboard(dashboardId);
-      client.setQueryData(["dashboard", dashboardId], record);
+      client.setQueryData(dashboardKey(dashboardId), record);
       replaced.current = true;
       // A panel someone else removed is added back on save.
       setLatest({ version: record.version, spec: record.spec, panel: openedPanel && record.spec.panels.find(p => p.id === openedPanel.id) });
@@ -118,10 +118,10 @@ export default function PanelEditor({ dashboardId, version: openedVersion, spec:
         // An unsaved layout is saved with the panel, as Duplicate and Remove do.
         ? await replaceDashboard(dashboardId, { ...spec, panels: added ? [...spec.panels, added] : spec.panels.map(p => p.id === panel!.id ? { ...result, id: p.id, title: name, grid: p.grid } : p) }, version, `${message} and saved layout`)
         : await patchDashboard(dashboardId, [added ? { op: "add_panel", panel: added } : { op: "update_panel", id: panel!.id, set: changes(panel!, { ...result, id: panel!.id, title: name }) }], version, message);
-      await client.cancelQueries({ queryKey: ["dashboard", dashboardId], exact: true });
-      client.setQueryData(["dashboard", dashboardId], record);
+      await client.cancelQueries({ queryKey: dashboardKey(dashboardId), exact: true });
+      client.setQueryData(dashboardKey(dashboardId), record);
       void client.invalidateQueries({ queryKey: dashboardsKey });
-      void client.invalidateQueries({ queryKey: ["dashboard-versions", dashboardId] });
+      void client.invalidateQueries({ queryKey: dashboardVersionsKey(dashboardId) });
       onClose();
     } catch (failure) {
       if (failure instanceof ApiError && failure.code === "dashboard_version_conflict") { setConflict("stale"); return; }

@@ -80,16 +80,26 @@ service:
       exporters: [otlp/pitot]`;
 }
 
+function CopyIconButton({ value, label }: { value: string; label: string }) {
+  return <CopyButton value={value} timeout={1500}>
+    {({ copied, copy }) => <Tooltip label={copied ? "Copied" : label} withArrow>
+      <Button variant="subtle" color="gray" size="sm" onClick={copy} aria-label={label}>
+        {copied ? <Check size={15} weight="bold" /> : <Copy size={15} />}
+      </Button>
+    </Tooltip>}
+  </CopyButton>;
+}
+
+function CopyConfigButton({ config }: { config: string }) {
+  return <CopyButton value={config} timeout={1500}>
+    {({ copied, copy }) => <Button variant="light" size="compact-sm" leftSection={copied ? <Check size={15} weight="bold" /> : <Copy size={15} />} onClick={copy}>{copied ? "Copied" : "Copy configuration"}</Button>}
+  </CopyButton>;
+}
+
 function Field({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return <KeyValueList layout="stacked" items={[{ label, hint, value: <Group gap="xs" wrap="nowrap" align="center">
       <Code style={{ flex: 1, overflowX: "auto" }}>{value}</Code>
-      <CopyButton value={value} timeout={1500}>
-        {({ copied, copy }) => <Tooltip label={copied ? "Copied" : `Copy ${label.toLowerCase()}`} withArrow>
-          <Button variant="subtle" color="gray" size="sm" onClick={copy} aria-label={`Copy ${label.toLowerCase()}`}>
-            {copied ? <Check size={15} weight="bold" /> : <Copy size={15} />}
-          </Button>
-        </Tooltip>}
-      </CopyButton>
+      <CopyIconButton value={value} label={`Copy ${label.toLowerCase()}`} />
     </Group> }]} />;
 }
 
@@ -116,9 +126,7 @@ function CreatedToken({ created, config, onDone }: { created: { name: string; va
         <Code block style={{ fontSize: 12 }}>{config}</Code>
       </Stack>
       <Group>
-        <CopyButton value={config} timeout={1500}>
-          {({ copied, copy }) => <Button variant="light" size="compact-sm" leftSection={copied ? <Check size={15} weight="bold" /> : <Copy size={15} />} onClick={copy}>{copied ? "Copied" : "Copy configuration"}</Button>}
-        </CopyButton>
+        <CopyConfigButton config={config} />
         <Button variant="subtle" color="gray" size="compact-sm" onClick={onDone}>Done</Button>
       </Group>
     </Stack>
@@ -274,13 +282,7 @@ export function ConnectTelemetry() {
           <Text size="sm" fw={600}>Endpoint</Text>
           <Group gap="xs" wrap="nowrap" align="center">
             <TextInput aria-label="Endpoint" value={endpointInput} onChange={(event) => setEndpointOverride(event.currentTarget.value)} style={{ flex: 1 }} styles={{ input: { fontFamily: "var(--mantine-font-family-monospace)" } }} />
-            <CopyButton value={endpoint} timeout={1500}>
-              {({ copied, copy }) => <Tooltip label={copied ? "Copied" : "Copy endpoint"} withArrow>
-                <Button variant="subtle" color="gray" size="sm" onClick={copy} aria-label="Copy endpoint">
-                  {copied ? <Check size={15} weight="bold" /> : <Copy size={15} />}
-                </Button>
-              </Tooltip>}
-            </CopyButton>
+            <CopyIconButton value={endpoint} label="Copy endpoint" />
           </Group>
           <Text c="dimmed" size="xs">{overTLS(endpoint, tlsConfigured) ? "OTLP over gRPC, secured with TLS." : "OTLP over gRPC. Pitot serves this endpoint in plaintext, so an exporter needs tls.insecure unless a proxy in front of it terminates TLS."} Edit this when collectors reach Pitot through another hostname.</Text>
         </Stack>
@@ -297,11 +299,7 @@ export function ConnectTelemetry() {
         <Stack gap="sm">
           <Code block style={{ fontSize: 12 }}>{config}</Code>
           <Group justify="flex-end">
-            <CopyButton value={config} timeout={1500}>
-              {({ copied, copy }) => <Button variant="light" size="compact-sm" leftSection={copied ? <Check size={15} weight="bold" /> : <Copy size={15} />} onClick={copy}>
-                {copied ? "Copied" : "Copy configuration"}
-              </Button>}
-            </CopyButton>
+            <CopyConfigButton config={config} />
           </Group>
         </Stack>
       </Paper>

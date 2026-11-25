@@ -3,6 +3,7 @@ package pitotql
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -467,7 +468,7 @@ func (s *completionCandidates) fields(e expect, numeric bool, scope string) {
 			detail := field.Description
 			if aliases := query.FieldAliases(name); len(aliases) > 0 {
 				// Name the values people type, not the stored enums.
-				detail = strings.Join(sortedCompletionKeys(aliases), ", ")
+				detail = strings.Join(slices.Sorted(maps.Keys(aliases)), ", ")
 			}
 			s.add(name, name, "field", detail, 0, boost)
 		}
@@ -603,7 +604,7 @@ func (s *completionCandidates) values(e expect) {
 			}
 		} else if query.FieldVocabularies()[key].Signal == s.source {
 			aliases := query.FieldAliases(key)
-			for _, label := range sortedCompletionKeys(aliases) {
+			for _, label := range slices.Sorted(maps.Keys(aliases)) {
 				value(label, aliases[label], 0)
 			}
 		}
@@ -690,15 +691,6 @@ func (s *completionCandidates) values(e expect) {
 	if e.Scope == ":" {
 		value("*", "*", 0)
 	}
-}
-
-func sortedCompletionKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	return keys
 }
 
 func (s *completionCandidates) measures() {

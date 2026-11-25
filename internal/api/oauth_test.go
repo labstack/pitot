@@ -60,7 +60,7 @@ func newOAuthTestServerAndDB(t *testing.T, cfg config.Config) (*echo.Echo, *auth
 	// Test-only login hook: it still creates the cookie through the production
 	// BrowserSessions API and middleware commit path.
 	e.POST("/api/auth/setup", func(c *echo.Context) error {
-		user, err := users.GetByID(c.Request().Header.Get("X-Test-User"))
+		user, err := users.GetByIDContext(t.Context(), c.Request().Header.Get("X-Test-User"))
 		if err != nil {
 			return err
 		}

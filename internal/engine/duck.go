@@ -294,8 +294,8 @@ func (d *Duck) WriteGate() *writegate.Gate { return &d.writeGate }
 // duckDBPoolSize is the effective connection-pool size: the configured value,
 // floored at 1.
 func duckDBPoolSize(cfg config.Config) int {
-	if cfg.DuckDBMaxConns < 1 {
-		return 1
+	if cfg.DuckDBMaxConns < defaultDuckDBPoolSize {
+		return defaultDuckDBPoolSize
 	}
 	return cfg.DuckDBMaxConns
 }
@@ -1916,12 +1916,14 @@ func forAffectedKeys(ctx context.Context, tx rollupSQL, query string, queryArgs 
 	defer rows.Close()
 	width := strings.Count(key, "?")
 	var args []any
+	// Scanning into *any copies driver-owned bytes, so the buffers can be
+	// reused; append copies each value out.
+	values := make([]any, width)
+	dest := make([]any, width)
+	for i := range values {
+		dest[i] = &values[i]
+	}
 	for rows.Next() {
-		values := make([]any, width)
-		dest := make([]any, width)
-		for i := range values {
-			dest[i] = &values[i]
-		}
 		if err := rows.Scan(dest...); err != nil {
 			return err
 		}
@@ -2082,8 +2084,6 @@ const edgeArrivalGap = 5 * time.Minute
 // Only relationship keys are read from the recent ingestion range. Its stamp
 // predicates allow Parquet footer pruning independently of event-time history.
 // Messaging uses the aggregate's exact keys, including the shared minute.
-var createEdgePassBucketsSQL = "CREATE TEMP TABLE edge_pass_buckets AS " + edgePassBucketsSelectSQL
-
 var edgePassBucketsSelectSQL = fmt.Sprintf(`
 WITH incoming AS MATERIALIZED (
   SELECT namespace, trace_id, span_id, parent_span_id, start_time, kind

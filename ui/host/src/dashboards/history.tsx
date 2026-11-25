@@ -6,7 +6,7 @@ import { exactTimestamp } from "../../../format";
 import { changeChips } from "../dashboard-receipt";
 import { DashboardChangeChips } from "../dashboard-change-chips";
 import { dashboardDataPredicate } from "./cache";
-import { ApiError, dashboardsKey, getVersion, listVersions, restoreVersion, type DashboardRecord, type VersionInfo, type VersionRecord } from "./api";
+import { ApiError, dashboardKey, dashboardsKey, dashboardVersionsKey, getVersion, listVersions, restoreVersion, type DashboardRecord, type VersionInfo, type VersionRecord } from "./api";
 
 type HistoryProps = { id: string; currentVersion: number; currentSpec: DashboardRecord["spec"]; opened: boolean; onClose(): void; onRestored(record: DashboardRecord): void };
 
@@ -31,11 +31,11 @@ export function HistoryDrawer({ id, currentVersion, currentSpec, opened, onClose
     mutationFn: ({ version }: { version: number; generation: number }) => restoreVersion(id, version),
     retry: false,
     onSuccess: (record, { version, generation }) => {
-      void client.cancelQueries({ queryKey: ["dashboard", id], exact: true });
+      void client.cancelQueries({ queryKey: dashboardKey(id), exact: true });
       void client.cancelQueries({ predicate: dashboardDataPredicate(id) });
       void client.cancelQueries({ queryKey: ["exemplars"] });
       void client.cancelQueries({ queryKey: ["drill-trace"] });
-      client.setQueryData(["dashboard", id], record);
+      client.setQueryData(dashboardKey(id), record);
       // Mark data stale without re-posting the old spec. The page refetches
       // mounted keys after the committed record renders.
       void client.invalidateQueries({ predicate: dashboardDataPredicate(id), refetchType: "none" });
@@ -44,12 +44,12 @@ export function HistoryDrawer({ id, currentVersion, currentSpec, opened, onClose
         restoredCallback.current(record);
       }
       void client.invalidateQueries({ queryKey: dashboardsKey });
-      void client.invalidateQueries({ queryKey: ["dashboard-versions", id] }, { cancelRefetch: false });
+      void client.invalidateQueries({ queryKey: dashboardVersionsKey(id) }, { cancelRefetch: false });
       void client.invalidateQueries({ queryKey: ["exemplars"], refetchType: "none" });
       void client.invalidateQueries({ queryKey: ["drill-trace"], refetchType: "none" });
     },
     onError: error => {
-      if (error instanceof ApiError && error.code === "dashboard_version_not_found") void client.invalidateQueries({ queryKey: ["dashboard-versions", id] });
+      if (error instanceof ApiError && error.code === "dashboard_version_not_found") void client.invalidateQueries({ queryKey: dashboardVersionsKey(id) });
     },
     onSettled: () => { submitting.current = false; if (mounted.current) setPending(false); },
   });
@@ -58,14 +58,14 @@ export function HistoryDrawer({ id, currentVersion, currentSpec, opened, onClose
     if (opened) { setContentMounted(true); return; }
     feedbackGeneration.current++;
     restore.reset(); setSuccess(undefined);
-    void client.cancelQueries({ queryKey: ["dashboard-versions", id] });
+    void client.cancelQueries({ queryKey: dashboardVersionsKey(id) });
     void client.cancelQueries({ queryKey: ["dashboard-version", id] });
   }, [opened, id, client, restore.reset]);
   const observedVersion = useRef(currentVersion);
   useEffect(() => {
     if (observedVersion.current === currentVersion) return;
     observedVersion.current = currentVersion;
-    void client.invalidateQueries({ queryKey: ["dashboard-versions", id] }, { cancelRefetch: false });
+    void client.invalidateQueries({ queryKey: dashboardVersionsKey(id) }, { cancelRefetch: false });
   }, [currentVersion, id, client]);
   const submit = (version: number) => {
     if (submitting.current) return;
@@ -83,7 +83,7 @@ function HistoryContent({ id, opened, currentVersion, currentSpec, selected, onS
   id: string; opened: boolean; currentVersion: number; currentSpec: DashboardRecord["spec"]; selected?: number; onSelect(version: number): void;
   pending: boolean; error: Error | null; failedVersion?: number; success?: { text: string }; onRestore(version: number): void;
 }) {
-  const list = useQuery({ queryKey: ["dashboard-versions", id], queryFn: ({ signal }) => listVersions(id, signal), enabled: opened, retry: false });
+  const list = useQuery({ queryKey: dashboardVersionsKey(id), queryFn: ({ signal }) => listVersions(id, signal), enabled: opened, retry: false });
   const version = selected ?? list.data?.[0]?.version;
   const detail = useQuery({ queryKey: ["dashboard-version", id, version], queryFn: ({ signal }) => getVersion(id, version!, signal), enabled: opened && version !== undefined, retry: false });
   // The restore button is disabled while it works, which drops focus; the confirmation takes it.

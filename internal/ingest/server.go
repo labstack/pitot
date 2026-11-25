@@ -72,7 +72,6 @@ func (ts *traceService) Export(ctx context.Context, req *collectortrace.ExportTr
 }
 
 func (s *Server) exportTraces(ctx context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
-	cfg := s.cfg
 	count := 0
 	for _, rs := range req.ResourceSpans {
 		for _, ss := range rs.ScopeSpans {
@@ -88,14 +87,9 @@ func (s *Server) exportTraces(ctx context.Context, req *collectortrace.ExportTra
 		batch.Spans = make([]telemetry.Span, 0, count)
 	}
 	for _, rs := range req.ResourceSpans {
-		resources, err := resourceAttributes(rs.Resource)
+		resources, svc, namespace, err := s.resourceIdentity(rs.Resource)
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-		svc := getServiceName(rs.Resource)
-		namespace := getServiceNamespace(rs.Resource)
-		if namespace == "" {
-			namespace = cfg.DefaultNamespace
 		}
 		for _, ss := range rs.ScopeSpans {
 			scopeName, scopeVer := scopeInfo(ss.Scope)
@@ -195,7 +189,6 @@ func (ls *logsService) Export(ctx context.Context, req *collectorlogs.ExportLogs
 }
 
 func (s *Server) exportLogs(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest) (*collectorlogs.ExportLogsServiceResponse, error) {
-	cfg := s.cfg
 	count := 0
 	for _, rl := range req.ResourceLogs {
 		for _, sl := range rl.ScopeLogs {
@@ -211,14 +204,9 @@ func (s *Server) exportLogs(ctx context.Context, req *collectorlogs.ExportLogsSe
 		batch.Logs = make([]telemetry.Log, 0, count)
 	}
 	for _, rl := range req.ResourceLogs {
-		resources, err := resourceAttributes(rl.Resource)
+		resources, svc, namespace, err := s.resourceIdentity(rl.Resource)
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-		svc := getServiceName(rl.Resource)
-		namespace := getServiceNamespace(rl.Resource)
-		if namespace == "" {
-			namespace = cfg.DefaultNamespace
 		}
 		for _, sl := range rl.ScopeLogs {
 			scopeName, scopeVer := scopeInfo(sl.Scope)
@@ -263,7 +251,6 @@ func (ms *metricsService) Export(ctx context.Context, req *collectormetrics.Expo
 }
 
 func (s *Server) exportMetrics(ctx context.Context, req *collectormetrics.ExportMetricsServiceRequest) (*collectormetrics.ExportMetricsServiceResponse, error) {
-	cfg := s.cfg
 	count := 0
 	for _, rm := range req.ResourceMetrics {
 		for _, sm := range rm.ScopeMetrics {
@@ -292,14 +279,9 @@ func (s *Server) exportMetrics(ctx context.Context, req *collectormetrics.Export
 		batch.Metrics = make([]telemetry.Metric, 0, count)
 	}
 	for _, rm := range req.ResourceMetrics {
-		resources, err := resourceAttributes(rm.Resource)
+		resources, svc, namespace, err := s.resourceIdentity(rm.Resource)
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-		svc := getServiceName(rm.Resource)
-		namespace := getServiceNamespace(rm.Resource)
-		if namespace == "" {
-			namespace = cfg.DefaultNamespace
 		}
 		for _, sm := range rm.ScopeMetrics {
 			scopeName, scopeVer := scopeInfo(sm.Scope)
@@ -702,6 +684,20 @@ func anyValueString(v *common.AnyValue) string {
 	}
 }
 
+// resourceIdentity decodes a resource's attributes and its service identity,
+// defaulting an absent namespace to the configured one.
+func (s *Server) resourceIdentity(r *resourcepb.Resource) (map[string]any, string, string, error) {
+	resources, err := resourceAttributes(r)
+	if err != nil {
+		return nil, "", "", err
+	}
+	namespace := getServiceNamespace(r)
+	if namespace == "" {
+		namespace = s.cfg.DefaultNamespace
+	}
+	return resources, getServiceName(r), namespace, nil
+}
+
 func getServiceName(r *resourcepb.Resource) string {
 	return getResourceAttr(r, "service.name")
 }
@@ -710,16 +706,14 @@ func getServiceNamespace(r *resourcepb.Resource) string {
 	return getResourceAttr(r, "service.namespace")
 }
 
-func getResourceAttr(r *resourcepb.Resource, keys ...string) string {
+func getResourceAttr(r *resourcepb.Resource, key string) string {
 	if r == nil {
 		return ""
 	}
-	for _, key := range keys {
-		for _, kv := range r.Attributes {
-			if kv.Key == key {
-				if s := asString(kv.Value); s != "" {
-					return s
-				}
+	for _, kv := range r.Attributes {
+		if kv.Key == key {
+			if s := asString(kv.Value); s != "" {
+				return s
 			}
 		}
 	}

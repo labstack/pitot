@@ -56,11 +56,7 @@ func (c *footerCache) open(path string) (*parquet.File, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return nil, nil, errors.Join(err, file.Close())
-	}
-	parsed, err := parquet.OpenFile(file, info.Size(), parquet.SkipBloomFilters(true))
+	parsed, err := openParquet(file, parquet.SkipBloomFilters(true))
 	if err != nil {
 		return nil, nil, errors.Join(err, file.Close())
 	}

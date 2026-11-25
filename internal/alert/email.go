@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -464,7 +465,7 @@ func (e *Engine) deliverEmail(ctx context.Context, row generated.AlertEmailDeliv
 func (e *Engine) stillAddressed(row generated.AlertEmailDelivery) (bool, error) {
 	rule, err := e.store.GetRule(row.RuleID)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, ErrNotFound) {
 			return false, nil
 		}
 		return false, err

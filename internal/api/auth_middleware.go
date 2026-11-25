@@ -249,12 +249,9 @@ func recordAuthorizationDenied(c *echo.Context, user auth.User) {
 		slog.Error("authorization audit store is unavailable")
 		return
 	}
-	ctx, cancel := auth.DetachedWriteContext(c.Request().Context())
-	defer cancel()
-	if err := audit.Record(ctx, auth.AuditEvent{
+	if err := recordRequestAudit(c, audit, auth.AuditEvent{
 		ActorUserID: user.ID, EventType: "authorization.denied", Outcome: "denied",
 		TargetType: "route", TargetID: c.Request().Method + " " + c.Request().URL.Path,
-		RemoteIP: c.RealIP(), UserAgent: c.Request().UserAgent(),
 	}); err != nil {
 		slog.Error("authorization audit write failed", "err", err)
 	}

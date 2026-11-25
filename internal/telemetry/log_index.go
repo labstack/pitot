@@ -150,11 +150,7 @@ func scanLogTraceHashes(ctx context.Context, path string, expected int, visit fu
 		return err
 	}
 	defer func() { err = errors.Join(err, file.Close()) }()
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	parsed, err := parquet.OpenFile(file, info.Size(), parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true), parquet.ReadBufferSize(1<<20))
+	parsed, err := openParquet(file, parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true), parquet.ReadBufferSize(1<<20))
 	if err != nil {
 		return err
 	}

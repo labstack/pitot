@@ -10,6 +10,8 @@ import type { AnnotationsResponse } from "../../../panels/annotations";
 import { panelTimeLabel } from "../../../panels/interaction";
 import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { fonts } from "../../../tokens";
+import { plural } from "../../../format";
+import { measureText } from "./measure-text";
 import { PanelData, PanelSpec } from "./inspect";
 import type { MapView } from "./viz/service-map";
 import { ChartHintContext, compactHint } from "./chart-keyboard";
@@ -43,13 +45,10 @@ export function PanelCard({ panel, title, result, loading, compare, range, heigh
   const [headerWidth, setHeaderWidth] = useState(0);
   useLayoutEffect(() => {
     const measure = () => {
-      const context = document.createElement("canvas").getContext("2d");
       const titleFont = card.current?.querySelector("[data-panel-title]");
       const family = titleFont ? getComputedStyle(titleFont).fontFamily : "inherit";
-      if (context) context.font = `600 15px ${family}`;
-      const titleWidth = context?.measureText(title).width ?? Array.from(title).length * 8.25;
-      if (context) context.font = `400 11px ${family}`;
-      const switchWidth = ["Chart", "Data", "Spec"].reduce((sum, label) => sum + (context?.measureText(label).width ?? label.length * 7) + 12, 4);
+      const titleWidth = measureText(title, `600 15px ${family}`) ?? Array.from(title).length * 8.25;
+      const switchWidth = ["Chart", "Data", "Spec"].reduce((sum, label) => sum + (measureText(label, `400 11px ${family}`) ?? label.length * 7) + 12, 4);
       const extras = (panel.description ? 24 : 0) + 18 + (panelTimeLabel(panel)?.length ?? 0) * 7;
       setHeaderWidth(titleWidth + switchWidth + 22 + 32 + 20 + extras);
     };
@@ -231,7 +230,7 @@ function relativeTime(at: number, now: number): string {
   const seconds = Math.max(0, Math.floor((now - at) / 1000));
   if (seconds < 60) return "just now";
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  if (minutes < 60) return `${plural(minutes, "minute")} ago`;
   const hours = Math.floor(minutes / 60);
-  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  return `${plural(hours, "hour")} ago`;
 }

@@ -236,14 +236,20 @@ retry:
 			metrics.QueryCacheRequests.WithLabelValues(outcome).Inc()
 		}
 		c.mu.Lock()
-		flight.waiters--
-		if flight.waiters == 0 && (!flight.detached || !flight.started.Load() && !flight.background) {
-			flight.cancelled = true
-			flight.cancel()
-			// Retain the flight until fn exits, even if cancellation is slow.
-		}
+		c.leave(flight)
 		c.mu.Unlock()
 		return zero, outcome, ctx.Err()
+	}
+}
+
+// leave drops one waiter from flight, cancelling it when no waiter still
+// needs its result. The flight stays registered until fn exits, even if
+// cancellation is slow. The caller holds c.mu.
+func (c *resultCache) leave(flight *cacheFlight) {
+	flight.waiters--
+	if flight.waiters == 0 && (!flight.detached || !flight.started.Load() && !flight.background) {
+		flight.cancelled = true
+		flight.cancel()
 	}
 }
 
@@ -301,13 +307,8 @@ func (e *Executor) availablePanels(ctx context.Context, lookups []panelCacheLook
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, flight := range flights {
-			if flight == nil {
-				continue
-			}
-			flight.waiters--
-			if flight.waiters == 0 && (!flight.detached || !flight.started.Load() && !flight.background) {
-				flight.cancelled = true
-				flight.cancel()
+			if flight != nil {
+				c.leave(flight)
 			}
 		}
 	}()

@@ -352,17 +352,9 @@ func (e *Executor) run(ctx context.Context, req RunRequest, emit func(int, Resul
 	if err != nil {
 		return batchError(err)
 	}
-	t := d.Time
-	if req.Time != nil {
-		t = *req.Time
-		if t.Refresh == "" {
-			t.Refresh = d.Time.Refresh
-		}
-		var problems Problems
-		validateTime(t, &problems)
-		if len(problems) > 0 {
-			return problems
-		}
+	t, problems := requestTime(d.Time, req.Time)
+	if len(problems) > 0 {
+		return problems
 	}
 	start, end, err := resolveWindow(t, nil, now, e.maxWindow)
 	if err != nil {

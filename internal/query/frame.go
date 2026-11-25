@@ -64,21 +64,23 @@ func (f *Frame) addNote(note string) {
 func scanFrame(rows queryrows.Rows, columns []Column, maxRows int) (*Frame, error) {
 	defer rows.Close()
 	f := newFrame(columns)
+	// Scan resets each destination, and nullValue copies it out, so one set
+	// of destinations serves every row.
 	dest := make([]any, len(columns))
+	for i, c := range columns {
+		switch c.Type {
+		case "time":
+			dest[i] = new(sql.NullInt64)
+		case "number":
+			dest[i] = new(sql.NullFloat64)
+		default:
+			dest[i] = new(sql.NullString)
+		}
+	}
 	for rows.Next() {
 		if maxRows > 0 && f.Rows >= maxRows {
 			f.Truncated = true
 			break
-		}
-		for i, c := range columns {
-			switch c.Type {
-			case "time":
-				dest[i] = new(sql.NullInt64)
-			case "number":
-				dest[i] = new(sql.NullFloat64)
-			default:
-				dest[i] = new(sql.NullString)
-			}
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return nil, err

@@ -24,5 +24,5 @@ UPDATE alert_rules SET
 WHERE id = ?
 RETURNING *;
 
--- name: DeleteRule :exec
+-- name: DeleteRule :execrows
 DELETE FROM alert_rules WHERE id = ?;
