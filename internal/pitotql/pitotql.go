@@ -66,7 +66,12 @@ func withRecoveredProblems(q *queryTree, problems query.Problems, opts Options, 
 		problems = append(problems, p)
 	}
 	sortProblems(problems)
-	problems = presentProblems(problems)
+	return capProblems(presentProblems(problems))
+}
+
+// capProblems keeps the first maxProblems problems and replaces the rest with
+// one problem that says more exist, located at the first one dropped.
+func capProblems(problems query.Problems) query.Problems {
 	if len(problems) > maxProblems {
 		problems = append(problems[:maxProblems], query.Problem{Path: "text", Message: message(diagMore), Span: problems[maxProblems].Span})
 	}

@@ -15,20 +15,11 @@
 //   - `og:url` says the same thing, so the page does not claim two addresses;
 //   - the canonical is in the sitemap, so the two halves of the same claim
 //     about which URLs exist cannot drift apart.
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { htmlFiles } from "./html-files.mjs";
 
 const dist = new URL("../dist/", import.meta.url).pathname;
-
-async function htmlFiles(dir) {
-  const found = [];
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...(await htmlFiles(path)));
-    else if (entry.name.endsWith(".html")) found.push(path);
-  }
-  return found;
-}
 
 function canonicalOf(html) {
   return html.match(/<link[^>]+rel="canonical"[^>]+href="([^"]+)"/i)?.[1] ?? null;

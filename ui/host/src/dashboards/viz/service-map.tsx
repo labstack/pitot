@@ -7,6 +7,8 @@ import { analysisSummary } from "../../../../panels/analysis";
 import { healthGlyph, serviceMapModel } from "../../../../panels/rollups";
 import { formatValue } from "../../../../panels/units";
 import { accent, fonts, typeScale } from "../../../../tokens";
+import { plural } from "../../../../format";
+import { textMeasurer } from "../measure-text";
 import type { AnalysisProps } from "./analysis-chart";
 import ServiceMapWorker from "./service-map.worker?worker&inline";
 import { fitServiceMap, layoutServiceMapRaw, nodeMetrics, serviceCardLabels, serviceMapLineHeight, serviceMapStructure, type MapLayout } from "./service-map-layout";
@@ -19,10 +21,8 @@ export function ServiceMapViz({ panel, title = panel.title, result, dark, height
   const [size, setSize] = useState({ width: 500, height: Math.max(40, height - 24) });
   const [measured, setMeasured] = useState(false);
   const [fontVersion, setFontVersion] = useState(0);
-  const measureText = useMemo(() => {
-    const context = document.createElement("canvas").getContext("2d");
-    return context ? (text: string, font: string) => { context.font = font; return context.measureText(text).width; } : undefined;
-  }, [fontVersion]);
+  // A new measurer per font load re-keys the structure memo below.
+  const measureText = useMemo(() => textMeasurer(), [fontVersion]);
   useEffect(() => { const fonts = document.fonts, refresh = () => setFontVersion(v => v + 1); fonts?.addEventListener("loadingdone", refresh); return () => fonts?.removeEventListener("loadingdone", refresh); }, []);
   const [hover, setHover] = useState<string>(), [focused, setFocused] = useState<string>();
   const [view, setView] = useState(fittedView);
@@ -146,6 +146,6 @@ export function ServiceMapViz({ panel, title = panel.title, result, dark, height
       <StatusBadge tone="danger" icon={<span aria-hidden>◆</span>}>Unhealthy</StatusBadge>
       <StatusBadge tone="neutral" icon={<span aria-hidden>○</span>}>Unknown</StatusBadge>
     </Group>
-    <Text c="dimmed" fz={12} mt={4} style={{ flexShrink: 0 }}>{model.nodes.length} services · {model.edges.length} {model.edges.length === 1 ? "route" : "routes"}</Text>
+    <Text c="dimmed" fz={12} mt={4} style={{ flexShrink: 0 }}>{model.nodes.length} services · {plural(model.edges.length, "route")}</Text>
   </div>;
 }

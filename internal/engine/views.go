@@ -138,9 +138,30 @@ func CreateViews(db *sql.DB) error {
 	return nil
 }
 
+// rawProjections and cleanColumns hold each static signal's projections,
+// which depend only on its column definitions.
+var (
+	rawProjections = make(map[*telemetry.Signal]string, len(telemetry.Signals))
+	cleanColumns   = make(map[string]string, len(telemetry.Signals))
+)
+
+func init() {
+	for _, s := range telemetry.Signals {
+		rawProjections[s] = buildRawProjection(s)
+		cleanColumns[s.Name] = buildCleanColumns(s)
+	}
+}
+
 // rawProjection selects a signal's raw relation from its files: every stored
 // column except private ones, then the derived columns.
 func rawProjection(s *telemetry.Signal) string {
+	if projection, ok := rawProjections[s]; ok {
+		return projection
+	}
+	return buildRawProjection(s)
+}
+
+func buildRawProjection(s *telemetry.Signal) string {
 	var private, derived []string
 	for _, c := range s.Columns {
 		switch {
@@ -166,7 +187,15 @@ func createView(signal string) string {
 
 // cleanSelect projects a signal's clean view from a raw relation.
 func cleanSelect(signal, source string) string {
-	s, _ := telemetry.LookupSignal(signal)
+	columns, ok := cleanColumns[signal]
+	if !ok {
+		s, _ := telemetry.LookupSignal(signal)
+		columns = buildCleanColumns(s)
+	}
+	return "SELECT\n" + columns + "\nFROM " + source
+}
+
+func buildCleanColumns(s *telemetry.Signal) string {
 	var columns []string
 	for _, c := range s.Columns {
 		f := c.View
@@ -182,5 +211,5 @@ func cleanSelect(signal, source string) string {
 		}
 		columns = append(columns, "  "+expr)
 	}
-	return "SELECT\n" + strings.Join(columns, ",\n") + "\nFROM " + source
+	return strings.Join(columns, ",\n")
 }

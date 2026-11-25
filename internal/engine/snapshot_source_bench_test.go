@@ -173,7 +173,7 @@ func compareBroadSnapshotSources(t *testing.T, ctx context.Context, d *Duck, bat
 		t.Fatal(err)
 	}
 	// Freeze the previous broad-source expression explicitly so this control
-	// remains useful if runtime snapshotSource later changes its selection policy.
+	// remains useful if runtime physicalSource later changes its selection policy.
 	paths := make([]string, 0, len(batches))
 	for _, batch := range batches {
 		paths = append(paths, filepath.ToSlash(filepath.Join(d.repository.Parquet.BatchesDir(), batch.ID+telemetry.BatchSuffix, "spans.parquet")))

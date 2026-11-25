@@ -55,11 +55,7 @@ func mergeParquet(ctx context.Context, s *Signal, inputs []string, output string
 			return e
 		}
 		files = append(files, f)
-		info, e := f.Stat()
-		if e != nil {
-			return e
-		}
-		pf, e := parquet.OpenFile(f, info.Size(), parquet.ReadBufferSize(chunkReadBuffer), parquet.OptimisticRead(true))
+		pf, e := openParquet(f, parquet.ReadBufferSize(chunkReadBuffer), parquet.OptimisticRead(true))
 		if e != nil {
 			return e
 		}

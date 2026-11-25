@@ -6,7 +6,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { rowModel } from "../../../panels/rows";
 import type { DashboardSpec, Panel, PanelResult, Selection } from "../../../panels/types";
 import { ApiError, type Problem } from "../api-error";
-import { getTelemetrySchema, queryPanels } from "../dashboards/api";
+import { queryPanels, telemetrySchemaQuery } from "../dashboards/api";
 import { DrillDrawer } from "../dashboards/drill";
 import { exploreDrillClient } from "./drill";
 import { parseDrill } from "../dashboards/drill-state";
@@ -105,7 +105,7 @@ export function SearchPage({ preset, search, onSearch, onSaved, onExplore }: {
   const current = useRef(text); current.current = text;
   const terms = pickTerms(preset, search.picks ?? {});
   const termsNow = useRef(terms); termsNow.current = terms;
-  const services = useQuery({ queryKey: ["telemetry-schema"], queryFn: ({ signal }) => getTelemetrySchema(signal), staleTime: 60_000, retry: false, enabled: preset.fields.includes("service") });
+  const services = useQuery({ ...telemetrySchemaQuery, enabled: preset.fields.includes("service") });
   const pick = (patch: Partial<Picks>) => onSearch({ ...search, picks: { ...search.picks, ...patch } });
   // The filters this page last wrote to the URL; any other value came from history.
   const written = useRef(search.q);

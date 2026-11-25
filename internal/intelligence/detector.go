@@ -387,15 +387,8 @@ func errorRateAnomalySQL(startNano, endNano int64, scope string) string {
 
 // detectErrorRateAnomalies detects error rate spikes
 func (d *Detector) detectErrorRateAnomalies(ctx context.Context, start, end time.Time) ([]Anomaly, error) {
-	startNano := start.UnixNano()
-	endNano := end.UnixNano()
-	namespace := d.duck.DefaultNamespace()
-	scope := detectorScopeClause(namespace)
-
 	// Compare current error rate to baseline (previous period)
-	sql := errorRateAnomalySQL(startNano, endNano, scope)
-
-	rows, err := d.readServiceAnomalies(ctx, sql)
+	rows, err := d.readWindowAnomalies(ctx, start, end, errorRateAnomalySQL)
 	if err != nil {
 		return nil, fmt.Errorf("error rate detection: %w", err)
 	}
@@ -431,14 +424,7 @@ func (d *Detector) detectErrorRateAnomalies(ctx context.Context, start, end time
 func (d *Detector) detectLatencyAnomalies(ctx context.Context, start, end time.Time) ([]Anomaly, error) {
 	// service_rollup grades served spans (with its outbound-only fallback).
 	// Weight minute p95 values by spans; do not recompute raw-span quantiles.
-	startNano := start.UnixNano()
-	endNano := end.UnixNano()
-	namespace := d.duck.DefaultNamespace()
-	scope := detectorScopeClause(namespace)
-
-	sql := latencyAnomalySQL(startNano, endNano, scope)
-
-	rows, err := d.readServiceAnomalies(ctx, sql)
+	rows, err := d.readWindowAnomalies(ctx, start, end, latencyAnomalySQL)
 	if err != nil {
 		return nil, fmt.Errorf("latency detection: %w", err)
 	}
@@ -532,14 +518,7 @@ func volumeAnomalySQL(startNano, endNano int64, scope string) string {
 
 // detectVolumeAnomalies detects unusual traffic volume changes
 func (d *Detector) detectVolumeAnomalies(ctx context.Context, start, end time.Time) ([]Anomaly, error) {
-	startNano := start.UnixNano()
-	endNano := end.UnixNano()
-	namespace := d.duck.DefaultNamespace()
-	scope := detectorScopeClause(namespace)
-
-	sql := volumeAnomalySQL(startNano, endNano, scope)
-
-	rows, err := d.readServiceAnomalies(ctx, sql)
+	rows, err := d.readWindowAnomalies(ctx, start, end, volumeAnomalySQL)
 	if err != nil {
 		return nil, fmt.Errorf("volume detection: %w", err)
 	}
@@ -624,6 +603,13 @@ type serviceAnomalyRow struct {
 
 // Use the same internal read path as the product's service-rollup panels.
 // These fixed statements never pass through the public SQL allowlist.
+// readWindowAnomalies builds a detector statement for [start, end) in the
+// default namespace and reads its per-service rows.
+func (d *Detector) readWindowAnomalies(ctx context.Context, start, end time.Time, build func(startNano, endNano int64, scope string) string) ([]serviceAnomalyRow, error) {
+	scope := detectorScopeClause(d.duck.DefaultNamespace())
+	return d.readServiceAnomalies(ctx, build(start.UnixNano(), end.UnixNano(), scope))
+}
+
 func (d *Detector) readServiceAnomalies(ctx context.Context, statement string) ([]serviceAnomalyRow, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

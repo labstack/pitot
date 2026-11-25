@@ -239,7 +239,7 @@ func (h *MCPAuthorization) verifyMCPToken(ctx context.Context, raw string, _ *ht
 		slog.Error("mcp oauth token verification failed", "err", err)
 		return nil, fmt.Errorf("verify mcp access token: %w", err)
 	}
-	user, err := h.users.GetByID(record.UserID)
+	user, err := h.users.GetByIDContext(ctx, record.UserID)
 	if errors.Is(err, appauth.ErrUserNotFound) {
 		return nil, mcpgoauth.ErrInvalidToken
 	}
@@ -630,7 +630,7 @@ func (h *MCPAuthorization) exchangeAuthorizationCode(c *echo.Context, clientID s
 	if subtle.ConstantTimeCompare([]byte(want), []byte(code.CodeChallenge)) != 1 {
 		return appauth.OAuthTokenPair{}, appauth.ErrInvalidOAuthGrant
 	}
-	user, err := h.users.GetByID(code.UserID)
+	user, err := h.users.GetByIDContext(c.Request().Context(), code.UserID)
 	if errors.Is(err, appauth.ErrUserNotFound) {
 		return appauth.OAuthTokenPair{}, appauth.ErrInvalidOAuthGrant
 	}

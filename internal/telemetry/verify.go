@@ -12,7 +12,6 @@ import (
 	driver "github.com/duckdb/duckdb-go/v2"
 	engine "github.com/labstack/pitot/internal/duckdb"
 	"github.com/labstack/pitot/internal/telemetry/semconv"
-	"github.com/parquet-go/parquet-go"
 )
 
 var ErrUnsupportedBatchFormat = errors.New("unsupported telemetry batch format")
@@ -353,11 +352,7 @@ func fileSpills(path string, s *Signal) (spills, error) {
 		return spills{}, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return spills{}, err
-	}
-	file, err := parquet.OpenFile(f, info.Size())
+	file, err := openParquet(f)
 	if err != nil {
 		return spills{}, err
 	}

@@ -10,24 +10,15 @@
 // that matters most: a Starlight upgrade taking over the markdown config, after
 // which the plugin never runs at all and every table ships bare. Reading the
 // emitted HTML is the only vantage point from which that is visible.
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { htmlFiles } from "./html-files.mjs";
 
 // fileURLToPath, not .pathname: a URL keeps percent-escapes, so a checkout
 // under a path containing a space fails to read its own build output and
 // reports "run `npm run build` first" immediately after a successful build.
 const dist = fileURLToPath(new URL("../dist/", import.meta.url));
-
-async function htmlFiles(dir) {
-  const found = [];
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...(await htmlFiles(path)));
-    else if (entry.name.endsWith(".html")) found.push(path);
-  }
-  return found;
-}
 
 // Walks the raw HTML rather than parsing it: the only question is whether the
 // nearest enclosing element of each <table> carries the wrapper class, and the

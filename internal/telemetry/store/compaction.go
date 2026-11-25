@@ -205,7 +205,7 @@ func (r *Repository) compactParquet(ctx context.Context, publisher ParquetPublis
 	if err := os.MkdirAll(stage, 0o755); err != nil {
 		return 0, err
 	}
-	if err := errors.Join(syncDirectory(filepath.Dir(stage)), syncDirectory(r.root)); err != nil {
+	if err := errors.Join(telemetry.SyncDirectory(filepath.Dir(stage)), telemetry.SyncDirectory(r.root)); err != nil {
 		return 0, err
 	}
 	// The staging directory is the whole crash-recovery story. If anything below
@@ -595,15 +595,6 @@ func syncFile(path string) error {
 		return err
 	}
 	return f.Close()
-}
-
-func syncDirectory(path string) error {
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
 }
 
 func writeDurableFile(path string, data []byte) error {

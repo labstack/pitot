@@ -2,12 +2,14 @@ package pitotql
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -44,8 +46,32 @@ type vocabulary struct {
 	buckets   func() []string
 }
 
+// currentVocabulary snapshots the registry once per compilation: each list is
+// built on first use and shared by later reads in the same compilation. The
+// results are clipped so a caller's append never writes into the shared array.
 func currentVocabulary() vocabulary {
-	return vocabulary{query.SignalColumns, query.MeasureSpecs, query.FilterFunctionNames, query.BucketNames}
+	var mu sync.Mutex
+	type signalColumns struct {
+		fields []query.Field
+		ok     bool
+	}
+	columns := map[string]signalColumns{}
+	return vocabulary{
+		columns: func(signal string) ([]query.Field, bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			c, cached := columns[signal]
+			if !cached {
+				fields, ok := query.SignalColumns(signal)
+				c = signalColumns{slices.Clip(fields), ok}
+				columns[signal] = c
+			}
+			return c.fields, c.ok
+		},
+		measures:  sync.OnceValue(func() []query.MeasureSpec { return slices.Clip(query.MeasureSpecs()) }),
+		functions: sync.OnceValue(func() []string { return slices.Clip(query.FilterFunctionNames()) }),
+		buckets:   sync.OnceValue(func() []string { return slices.Clip(query.BucketNames()) }),
+	}
 }
 
 type resolver struct {
@@ -71,9 +97,7 @@ func resolveWith(q *queryTree, opts Options, vocab vocabulary) (*resolved, query
 		return r.problems[i].Span != nil && r.problems[j].Span != nil && r.problems[i].Span.Start < r.problems[j].Span.Start
 	})
 	r.problems = presentProblems(r.problems)
-	if len(r.problems) > maxProblems {
-		r.problems = append(r.problems[:maxProblems], query.Problem{Path: "text", Message: message(diagMore), Span: r.problems[maxProblems].Span})
-	}
+	r.problems = capProblems(r.problems)
 	if len(r.problems) > 0 {
 		return nil, r.problems
 	}
@@ -328,7 +352,7 @@ func (r *resolver) field(f *fieldName) {
 			r.issue(f.At, fmt.Sprintf("the variable %s cannot name a field; use it as a value, e.g. service:%s", key, key))
 		}
 	} else if !f.Bracket && !identifierPath.MatchString(key) && !strings.HasPrefix(key, "$__") {
-		bracketed := scope + "['" + strings.ReplaceAll(key, "'", "''") + "']"
+		bracketed := scope + "[" + sqlString(key) + "]"
 		fixes := []query.FixIt{{Label: bracketed, Span: *textSpan(f.At), Text: bracketed}}
 		var names []string
 		for _, c := range columns {
@@ -1042,7 +1066,7 @@ func queryPathSpan(q *queryTree, path string) span {
 }
 
 func aliasChoices(field string, aliases map[string]string) string {
-	keys := sortedCompletionKeys(aliases)
+	keys := slices.Sorted(maps.Keys(aliases))
 	// Preserve the documented order for diagnostic suggestions.
 	if order := query.FieldVocabularies()[field].Order; len(order) == len(keys) {
 		keys = order

@@ -471,7 +471,7 @@ func TestSCIMDeactivationEndsBrowserAndMCPAccess(t *testing.T) {
 	s := newSCIMServer(t)
 	s.seed(t, "owner", "owner@example.com", "admin")
 	member := s.seed(t, "member", "member@example.com", "admin")
-	user, err := s.users.GetByID(member.ID)
+	user, err := s.users.GetByIDContext(t.Context(), member.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestSCIMDeactivationEndsBrowserAndMCPAccess(t *testing.T) {
 	assertSessionEnded("after reactivation")
 	assertTokensRejected("after reactivation", bearer, refreshForm)
 	assertTokensRejected("after reactivation, unused grant", secondBearer, secondRefreshForm)
-	reactivated, err := s.users.GetByID(member.ID)
+	reactivated, err := s.users.GetByIDContext(t.Context(), member.ID)
 	if err != nil || reactivated.Status != auth.UserStatusActive {
 		t.Fatalf("reactivated = %+v err=%v", reactivated, err)
 	}
@@ -711,11 +711,11 @@ func (s *scimServer) signedInMember(t *testing.T) (auth.User, *http.Cookie, auth
 	t.Helper()
 	ownerResource := s.seed(t, "owner", "owner@example.com", "admin")
 	memberResource := s.seed(t, "member", "member@example.com", "admin")
-	owner, err := s.users.GetByID(ownerResource.ID)
+	owner, err := s.users.GetByIDContext(t.Context(), ownerResource.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
-	member, err := s.users.GetByID(memberResource.ID)
+	member, err := s.users.GetByIDContext(t.Context(), memberResource.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}

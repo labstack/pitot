@@ -159,7 +159,6 @@ func (s *Server) executeFragment(ctx context.Context, req query.RunRequest) (Pan
 		return PanelFragment{}, err
 	}
 	req = detached
-	query.Normalize(&req.Dashboard)
 	if req.Time != nil {
 		req.Dashboard.Time = *req.Time
 		req.Time = nil
@@ -243,15 +242,17 @@ func (s *Server) resolvePanelVariables(ctx context.Context, _ *mcp.CallToolReque
 	return summary("Panel variable options."), variableOptions{Options: options}, nil
 }
 
+// sqlLiteral quotes s as a SQL string literal.
+func sqlLiteral(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
 func fragmentPreset(kind, service, namespace, severity, search string, limit int) query.Dashboard {
 	d := query.Dashboard{Name: map[string]string{"overview": "System health", "topology": "Service dependencies", "performance": "Service performance", "logs": "Log explorer", "trace": "Trace detail"}[kind], Time: query.Time{Range: "1h", Refresh: "off"}}
 	filters := []string{}
-	literal := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 	if namespace != "" {
-		filters = append(filters, "namespace = "+literal(namespace))
+		filters = append(filters, "namespace = "+sqlLiteral(namespace))
 	}
 	if service != "" {
-		filters = append(filters, "service = "+literal(service))
+		filters = append(filters, "service = "+sqlLiteral(service))
 	}
 	add := func(id, title, viz, signal, measure, unit string, by []string, bucket string) {
 		q := &query.Spec{From: signal, Where: append([]string(nil), filters...), By: by, Bucket: bucket}
@@ -284,13 +285,13 @@ func fragmentPreset(kind, service, namespace, severity, search string, limit int
 		d.Panels[len(d.Panels)-1].Query.Where = append(d.Panels[len(d.Panels)-1].Query.Where, "kind IN ('SPAN_KIND_SERVER','SPAN_KIND_CONSUMER')")
 	case "logs":
 		if severity != "" {
-			filters = append(filters, "severity = "+literal(severity))
+			filters = append(filters, "severity = "+sqlLiteral(severity))
 		}
 		add("volume", "Log volume", "timeseries", "logs", "count()", "count", []string{"severity"}, "auto")
 		add("events", "Log events", "logs", "logs", "", "", nil, "")
 		if search != "" {
 			d.Panels[len(d.Panels)-1].Options = &query.Options{Highlight: search}
-			d.Panels[0].Query.Where = append(d.Panels[0].Query.Where, "contains(lower(body),lower("+literal(search)+"))")
+			d.Panels[0].Query.Where = append(d.Panels[0].Query.Where, "contains(lower(body),lower("+sqlLiteral(search)+"))")
 		}
 	case "trace":
 		add("traces", "Slow or erroring traces", "traces", "spans", "", "", nil, "")

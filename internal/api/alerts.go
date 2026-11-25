@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -186,7 +187,7 @@ func (h *alertHandler) ReplaceRule(c *echo.Context) error {
 
 	updated, err := h.store.ReplaceRule(req)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, alert.ErrNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "rule not found")
 		}
 		slog.Error("update rule failed", "id", id, "err", err)
@@ -214,7 +215,7 @@ func (h *alertHandler) DeleteRule(c *echo.Context) error {
 
 	id := c.Param("id")
 	if err := h.store.DeleteRule(id); err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, alert.ErrNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "rule not found")
 		}
 		slog.Error("delete rule failed", "id", id, "err", err)
@@ -237,7 +238,7 @@ func (h *alertHandler) TestRule(c *echo.Context) error {
 	id := c.Param("id")
 	rule, err := h.store.GetRule(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, alert.ErrNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "rule not found")
 		}
 		slog.Error("get rule failed", "id", id, "err", err)

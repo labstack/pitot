@@ -39,7 +39,7 @@ func TestAuthorizationMutationRollsBackWhenAuditWriteFails(t *testing.T) {
 	if _, err := users.UpdateWithAudit(user.ID, nil, nil, &role, nil, AuditEvent{EventType: "role.changed", Outcome: "success"}); err == nil {
 		t.Fatal("UpdateWithAudit succeeded without audit table")
 	}
-	unchanged, err := users.GetByID(user.ID)
+	unchanged, err := users.GetByIDContext(t.Context(), user.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestUserStore_Delete(t *testing.T) {
 	if err := s.DeleteWithAudit(u.ID, AuditEvent{EventType: "user.deleted", Outcome: "success"}); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	_, err := s.GetByID(u.ID)
+	_, err := s.GetByIDContext(t.Context(), u.ID)
 	if err == nil {
 		t.Fatal("expected ErrUserNotFound after delete")
 	}
@@ -189,7 +189,7 @@ func TestUserTimestampsUseOneSortableFormat(t *testing.T) {
 	if err := users.TouchLoginAt(user.ID, loginAt); err != nil {
 		t.Fatal(err)
 	}
-	touched, err := users.GetByID(user.ID)
+	touched, err := users.GetByIDContext(t.Context(), user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

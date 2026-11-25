@@ -141,11 +141,7 @@ func (s *UserStore) create(email, displayName string, role Role, event *AuditEve
 	return toUser(u), nil
 }
 
-// GetByID returns a user by ID.
-func (s *UserStore) GetByID(id string) (User, error) {
-	return s.GetByIDContext(context.Background(), id)
-}
-
+// GetByIDContext returns a user by ID.
 func (s *UserStore) GetByIDContext(ctx context.Context, id string) (User, error) {
 	u, err := s.q.GetUserByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -642,9 +642,11 @@ func operandType(n any, sig *signal) string {
 			return paramNumber
 		}
 	case "OPERATOR":
-		if field := fieldText(SQLExpression(v)); v["type"] == "ARRAY_EXTRACT" && field != "" {
-			if ref, err := sig.field(field); err == nil && ref.Type == TypeNumber {
-				return paramNumber
+		if v["type"] == "ARRAY_EXTRACT" {
+			if field := fieldText(SQLExpression(v)); field != "" {
+				if ref, err := sig.field(field); err == nil && ref.Type == TypeNumber {
+					return paramNumber
+				}
 			}
 		}
 		if v["type"] == "OPERATOR_COALESCE" {

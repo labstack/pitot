@@ -1,6 +1,5 @@
 import { authorizedFetch } from "./auth";
 
-export type Envelope<T> = { data: T };
 export type { DashboardSummary } from "./dashboards/api";
 
 export const threadHistoryQueryKey = ["agent-threads"] as const;

@@ -66,9 +66,7 @@ func TestVersionFailureDoesNotStarveNewBatches(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`(?s)INSERT INTO version_rollup SELECT.*c-new.*b-new`).WillReturnResult(sqlmock.NewResult(0, 1))
-	for i, id := range []string{"b-new", "c-new"} {
-		mock.ExpectExec(`INSERT INTO version_rollup_batches`).WithArgs(id, at.Add(time.Duration(i+1)*time.Minute).UnixNano()).WillReturnResult(sqlmock.NewResult(0, 1))
-	}
+	mock.ExpectExec(`INSERT INTO version_rollup_batches`).WithArgs("b-new", at.Add(time.Minute).UnixNano(), "c-new", at.Add(2*time.Minute).UnixNano()).WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectQuery(`SELECT count\(\*\) FROM version_rollup`).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	mock.ExpectExec(`INSERT INTO rollup_state`).WithArgs("version_rollup_v1_limited", int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
 

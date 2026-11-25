@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -46,7 +47,7 @@ func renderRoles() ([]byte, error) {
 	if len(roles) != len(roleOrder) {
 		var unlisted []string
 		for role := range roles {
-			if !contains(roleOrder, role) {
+			if !slices.Contains(roleOrder, role) {
 				unlisted = append(unlisted, role)
 			}
 		}
@@ -98,7 +99,7 @@ func renderRoles() ([]byte, error) {
 	for _, capability := range caps {
 		fmt.Fprintf(&b, "| `%s` |", capability)
 		for _, role := range roleOrder {
-			if contains(roles[role], capability) {
+			if slices.Contains(roles[role], capability) {
 				b.WriteString(" ✓ |")
 			} else {
 				b.WriteString(" — |")
@@ -125,13 +126,4 @@ func renderRoles() ([]byte, error) {
 	b.WriteString(":::\n")
 
 	return []byte(b.String()), nil
-}
-
-func contains(haystack []string, needle string) bool {
-	for _, item := range haystack {
-		if item == needle {
-			return true
-		}
-	}
-	return false
 }

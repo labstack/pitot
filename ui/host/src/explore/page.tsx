@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 import type { DashboardSpec, Panel, Query, VarValue, Viz } from "../../../panels/types";
 import { ApiError, type Problem } from "../api-error";
-import { getTelemetrySchema, queryPanels } from "../dashboards/api";
+import { queryPanels, telemetrySchemaQuery } from "../dashboards/api";
 import { DrillDrawer } from "../dashboards/drill";
 import { parseDrill } from "../dashboards/drill-state";
 import { drillSelection } from "../dashboards/panel-handlers";
@@ -145,7 +145,7 @@ export function ExplorePage({ search, onSearch, onSaved, context }: {
   const seen = useRef<string | undefined>(undefined);
   // Responses compare against what is in the editors now, not when they were sent.
   const current = useRef({ text, sql }); current.current = { text, sql };
-  const schema = useQuery({ queryKey: ["telemetry-schema"], queryFn: ({ signal }) => getTelemetrySchema(signal), staleTime: 60_000, retry: false, enabled: search.tab !== "query" });
+  const schema = useQuery({ ...telemetrySchemaQuery, enabled: search.tab !== "query" });
   // A remount, as StrictMode does, opens the page again.
   useEffect(() => () => { controller.current?.abort(); formatter.current.abort?.abort(); clearTimeout(formatter.current.timer); seen.current = undefined; }, []);
 

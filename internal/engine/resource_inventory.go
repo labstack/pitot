@@ -17,7 +17,7 @@ func (d *Duck) resourceInventorySource(batches []telemetry.BatchMetadata, marker
 	for _, s := range telemetry.Signals {
 		signal := s.Name
 		var interior, boundary []string
-		var raw []telemetry.BatchMetadata
+		var raw, boundaryBatches []telemetry.BatchMetadata
 		for _, batch := range batches {
 			bounds, count := batchTime(batch, signal)
 			if count == 0 || !retained && !overlapping(batch, signal, window) {
@@ -33,6 +33,7 @@ func (d *Duck) resourceInventorySource(batches []telemetry.BatchMetadata, marker
 				}
 			} else if markers[batch.ID] {
 				boundary = append(boundary, batch.ID)
+				boundaryBatches = append(boundaryBatches, batch)
 			} else {
 				raw = append(raw, batch)
 			}
@@ -51,19 +52,9 @@ func (d *Duck) resourceInventorySource(batches []telemetry.BatchMetadata, marker
 			upper := window.End.Truncate(time.Second)
 			contributions = append(contributions, `SELECT signal,namespace,service,resource,first_seen,last_seen FROM read_resource_seconds WHERE signal=`+sqlLiteral(signal)+` AND batch_id IN (`+idsSQL(boundary)+`) AND bucket >= `+timeLiteral(lower)+`::TIMESTAMP_NS AND bucket < `+timeLiteral(upper)+`::TIMESTAMP_NS`)
 			if !lower.Equal(window.Start) || !upper.Equal(window.End) {
-				selected := []telemetry.BatchMetadata{}
-				ids := map[string]bool{}
-				for _, id := range boundary {
-					ids[id] = true
-				}
-				for _, b := range batches {
-					if ids[b.ID] {
-						selected = append(selected, b)
-					}
-				}
 				clock := s.Clock()
 				predicate := windowPredicate(clock, window) + ` AND (` + clock + ` < ` + timeLiteral(lower) + ` OR ` + clock + ` >= ` + timeLiteral(upper) + `)`
-				contributions = append(contributions, `SELECT `+sqlLiteral(signal)+` AS signal,namespace,service,resource,min(`+clock+`) AS first_seen,max(`+clock+`) AS last_seen FROM (`+cleanSource(signal, d.snapshotSource(signal, selected, batches))+`) WHERE `+predicate+` GROUP BY namespace,service,resource`)
+				contributions = append(contributions, `SELECT `+sqlLiteral(signal)+` AS signal,namespace,service,resource,min(`+clock+`) AS first_seen,max(`+clock+`) AS last_seen FROM (`+cleanSource(signal, d.physicalSource(signal, boundaryBatches))+`) WHERE `+predicate+` GROUP BY namespace,service,resource`)
 			}
 		}
 
@@ -73,18 +64,11 @@ func (d *Duck) resourceInventorySource(batches []telemetry.BatchMetadata, marker
 			if !retained {
 				predicate = windowPredicate(clock, window)
 			}
-			contributions = append(contributions, `SELECT `+sqlLiteral(signal)+` AS signal,namespace,service,resource,min(`+clock+`) AS first_seen,max(`+clock+`) AS last_seen FROM (`+cleanSource(signal, d.snapshotSource(signal, raw, batches))+`) WHERE `+predicate+` GROUP BY namespace,service,resource`)
+			contributions = append(contributions, `SELECT `+sqlLiteral(signal)+` AS signal,namespace,service,resource,min(`+clock+`) AS first_seen,max(`+clock+`) AS last_seen FROM (`+cleanSource(signal, d.physicalSource(signal, raw))+`) WHERE `+predicate+` GROUP BY namespace,service,resource`)
 		}
 	}
 	if len(contributions) == 0 {
 		return emptyResourceInventory
 	}
-	scope := ""
-	if window.Namespace != "" {
-		scope += " AND namespace=" + sqlLiteral(window.Namespace)
-	}
-	if window.Service != "" {
-		scope += " AND service=" + sqlLiteral(window.Service)
-	}
-	return `SELECT signal,namespace,service,resource,min(first_seen) AS first_seen,max(last_seen) AS last_seen FROM (` + strings.Join(contributions, " UNION ALL ") + `) WHERE true` + scope + ` GROUP BY signal,namespace,service,resource`
+	return `SELECT signal,namespace,service,resource,min(first_seen) AS first_seen,max(last_seen) AS last_seen FROM (` + strings.Join(contributions, " UNION ALL ") + `) WHERE true` + scopePredicate(window) + ` GROUP BY signal,namespace,service,resource`
 }

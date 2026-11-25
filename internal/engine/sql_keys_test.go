@@ -127,7 +127,7 @@ SELECT count(*) FROM s WHERE attributes['http.response.status_code']::VARCHAR IN
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := d.snapshotSource("spans", repo.Parquet.BatchMetadata(), repo.Parquet.BatchMetadata())
+	source := d.physicalSource("spans", repo.Parquet.BatchMetadata())
 	if strings.Contains(source, "UNION") || strings.Contains(source, "status_code") || !strings.Contains(compiled.query, "_a_http_response_status_code >= 500") {
 		t.Fatalf("source:\n%s\nquery:\n%s", source, compiled.query)
 	}

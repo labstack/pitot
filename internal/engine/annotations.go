@@ -249,8 +249,12 @@ ON CONFLICT(namespace,service,service_version) DO UPDATE SET first_seen=least(ve
 			slog.Warn("version rollup rows affected unavailable", "err", err)
 		}
 	}
-	for _, b := range pending {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO version_rollup_batches VALUES (?,?)`, b.ID, b.MaxIngestedNanos); err != nil {
+	if len(pending) > 0 {
+		args := make([]any, 0, 2*len(pending))
+		for _, b := range pending {
+			args = append(args, b.ID, b.MaxIngestedNanos)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO version_rollup_batches VALUES `+strings.TrimSuffix(strings.Repeat("(?,?),", len(pending)), ","), args...); err != nil {
 			return 0, false, err
 		}
 	}

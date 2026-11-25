@@ -6,6 +6,7 @@ import { connect, disconnect, init, use, type EChartsCoreOption, type EChartsTyp
 import { CanvasRenderer } from "echarts/renderers";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { layoutEndLabels, type ChartSize } from "../../../panels/compile";
+import { textMeasurer } from "./measure-text";
 import { keyboardPoints, type KeyboardPoint, type PointEvent } from "../../../panels/keyboard";
 import { formatValue } from "../../../panels/units";
 import { ChartKeyboard } from "./chart-keyboard";
@@ -20,6 +21,7 @@ use([LabelLayout, CanvasRenderer, LineChart, BarChart, CustomChart, HeatmapChart
 const groups = new Map<string, number>();
 
 type DisplaySeries = {name?: string; data?: readonly unknown[]; interactive?: boolean; type?: string; keyboard_unit?: string; keyboard_x_unit?: string; tooltip?: {valueFormatter?(value: number): string}};
+const seriesOf = (o: EChartsCoreOption) => (Array.isArray(o.series) ? o.series : o.series ? [o.series] : []) as DisplaySeries[];
 type DisplayAxis = {type?: string; data?: string[]};
 export function EChartCanvas({ option, optionForSize, height, label, onClick, onZoom, group, keyboard }: { option: EChartsCoreOption; optionForSize?: (size: ChartSize) => EChartsCoreOption; height: number | string; label: string; onClick?: (params: PointEvent) => void; onZoom?: (from: number, to: number) => void; group?: string;
   keyboard?: {canSelect?(event: PointEvent): boolean; bounds?: {from: number; to: number}; interval?: string; onRangePending?(pending: boolean): void} }) {
@@ -40,12 +42,12 @@ export function EChartCanvas({ option, optionForSize, height, label, onClick, on
       chart.current?.dispatchAction({type: "showTip", seriesIndex: point.series_index, dataIndex: point.data_index});
     }
   }, []);
-  const displaySeries = (Array.isArray(displayed.series) ? displayed.series : displayed.series ? [displayed.series] : []) as DisplaySeries[];
+  const displaySeries = useMemo(() => seriesOf(displayed), [displayed]);
   const x = (Array.isArray(displayed.xAxis) ? displayed.xAxis[0] : displayed.xAxis) as DisplayAxis | undefined;
   const y = (Array.isArray(displayed.yAxis) ? displayed.yAxis[0] : displayed.yAxis) as DisplayAxis | undefined;
   const points = useMemo(() => {
     if (!keyboard || !active) return [];
-    const series = (Array.isArray(displayed.series) ? displayed.series : displayed.series ? [displayed.series] : []) as DisplaySeries[];
+    const series = displaySeries;
     const category = y?.type === "category" && series[0]?.type !== "custom" ? y : x?.type === "category" ? x : undefined;
     return keyboardPoints(series.map(s => ({...s, interactive: undefined}))).map(point => {
       const value = Array.isArray(point.event.value) ? point.event.value : [];
@@ -102,14 +104,10 @@ export function EChartCanvas({ option, optionForSize, height, label, onClick, on
     rangeBarHeight.current = height; apply.current();
   }, []);
   const auditInput = useRef<{ compiled: EChartsCoreOption; size: ChartSize } | null>(null);
-  const context = useRef<CanvasRenderingContext2D | null | undefined>(undefined);
   const responsive = useRef(false);
   responsive.current = Boolean(optionForSize);
   apply.current = () => {
-    if (context.current === undefined) context.current = document.createElement("canvas").getContext("2d");
-    const ctx = context.current;
-    const measureText = ctx ? (text: string, font: string) => { ctx.font = font; return ctx.measureText(text).width; } : undefined;
-    const size = { measureText, width: ref.current?.clientWidth ?? 0, height: ref.current?.clientHeight ?? 0 };
+    const size = { measureText: textMeasurer(), width: ref.current?.clientWidth ?? 0, height: ref.current?.clientHeight ?? 0 };
     let compiled = optionForSize && size.width > 0 && size.height > 0 ? optionForSize(size) : option;
     if (rangeBarHeight.current && compiled.grid && !Array.isArray(compiled.grid)) {
       const grid = compiled.grid as {bottom?: number};
@@ -205,7 +203,7 @@ export function EChartCanvas({ option, optionForSize, height, label, onClick, on
   }, [group]);
 
   const canvas = <div ref={ref} role="img" aria-label={description} aria-hidden={keyboard ? true : undefined} style={{ height: keyboard ? "100%" : height, position: keyboard ? "absolute" : undefined, inset: keyboard ? 0 : undefined, zIndex: keyboard ? 0 : undefined, flex: "1 1 auto", minHeight: 0, width: "100%", minWidth: 0, cursor: onClick ? "pointer" : undefined }} />;
-  const series = (Array.isArray(option.series) ? option.series : option.series ? [option.series] : []) as DisplaySeries[];
+  const series = seriesOf(option);
   const overview = label + ": " + series.length + " series" + (keyboard?.bounds ? "; " + new Date(keyboard.bounds.from).toISOString() + " – " + new Date(keyboard.bounds.to).toISOString() : "");
   return keyboard ? <ChartKeyboard height={height} rangeReset={rangeReset} onRangeChange={previewRange} onRangeBarHeight={reserveRangeBar} points={points} label={overview} summary={summary} onClick={onClick} canSelect={keyboard.canSelect} onHighlight={highlight} onZoom={onZoom} bounds={keyboard.bounds} pointWindow={pointWindow}
     onRangePending={keyboard.onRangePending} onActiveChange={next => {

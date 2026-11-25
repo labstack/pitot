@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { DashboardTime, Panel } from "../../../panels/types";
 import { ApiError } from "../api-error";
-import { createDashboard, dashboardsKey, getDashboard, listDashboards, patchDashboard } from "../dashboards/api";
+import { createDashboard, dashboardKey, dashboardsKey, getDashboard, listDashboards, patchDashboard } from "../dashboards/api";
 
 const titleLimit = 80;
 
@@ -50,7 +50,7 @@ export function SaveDialog({ panel, time, onClose, onSaved }: {
         id = record.id;
       }
       void client.invalidateQueries({ queryKey: dashboardsKey });
-      void client.invalidateQueries({ queryKey: ["dashboard", id] });
+      void client.invalidateQueries({ queryKey: dashboardKey(id) });
       onSaved(id);
     } catch (failure) {
       if (failure instanceof ApiError && failure.code === "dashboard_version_conflict") setError("Someone saved that dashboard a moment ago. Save again to add the panel to the latest version.");

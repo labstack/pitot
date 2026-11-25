@@ -23,7 +23,7 @@ const replacesFile = "replaces.json"
 const prunedFile = "pruned"
 
 // syncRetiredDirectory is the batch-directory fsync CollectRetired issues.
-var syncRetiredDirectory = syncDirectory
+var syncRetiredDirectory = SyncDirectory
 
 // SnapshotPin records the catalog epoch a reader entered at. A reader pins
 // before it captures BatchMetadata and unpins when it no longer opens files.
@@ -250,7 +250,7 @@ func writePruned(dir string) error {
 	if err := writeBytesFile(path, nil); err != nil {
 		return err
 	}
-	return syncDirectory(dir)
+	return SyncDirectory(dir)
 }
 
 func hasPruned(dir string) (bool, error) {
@@ -293,7 +293,7 @@ func writeReplaces(dir string, inputs []string) error {
 	if err := writeBytesFile(path, data); err != nil {
 		return err
 	}
-	return syncDirectory(dir)
+	return SyncDirectory(dir)
 }
 
 func readReplaces(dir string) ([]string, error) {

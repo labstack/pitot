@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ALL, type DashboardSpec, type VarValue } from "../../../panels/types";
 import { createDashboardPrompt, usePitotApp, type TurnOptions } from "../app-context";
-import { ApiError, dashboardsKey, getDashboard, listDashboards, queryExemplars, getTrace, resolveVariables } from "./api";
+import { ApiError, dashboardKey, dashboardsKey, getDashboard, listDashboards, queryExemplars, getTrace, resolveVariables } from "./api";
 import { PanelGrid } from "./grid";
 import { DrillDrawer } from "./drill";
 import { DuplicateDialog } from "./duplicate-dialog";
@@ -45,7 +45,7 @@ export function DashboardPage({ dashboardId, search, onSearch, onOpen }: { dashb
     if (dashboardId || !list.data?.length) return;
     onOpen((list.data.find((d) => d.is_default) ?? list.data[0]).id, true);
   }, [dashboardId, list.data]);
-  const record = useQuery({ queryKey: ["dashboard", dashboardId], queryFn: ({ signal }) => getDashboard(dashboardId!, signal), enabled: Boolean(dashboardId), retry: (count, error) => !(error instanceof ApiError && error.code === "not_found") && count < 2 });
+  const record = useQuery({ queryKey: dashboardKey(dashboardId), queryFn: ({ signal }) => getDashboard(dashboardId!, signal), enabled: Boolean(dashboardId), retry: (count, error) => !(error instanceof ApiError && error.code === "not_found") && count < 2 });
 
   if (!dashboardId && list.error) return <Stack p="lg"><PageHeader title="Dashboards" description="Monitor your services and investigate changes." /><DataState state="error" error={{title: "Dashboards could not be loaded", message: list.error.message, onRetry: () => void list.refetch()}} /></Stack>;
   if (!dashboardId && list.data?.length === 0) return <Center mih="50vh"><Stack align="center" gap="xs">

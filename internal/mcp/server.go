@@ -313,11 +313,7 @@ func clientSupportsMCPApps(req mcp.Request) bool {
 			}
 		}
 	case []string:
-		for _, value := range mimeTypes {
-			if value == mcpAppMIME {
-				return true
-			}
-		}
+		return slices.Contains(mimeTypes, mcpAppMIME)
 	}
 	return false
 }
@@ -502,7 +498,7 @@ func (s *Server) trace(ctx context.Context, _ *mcp.CallToolRequest, input TraceI
 	// A representative lookup is performed once. The list must represent that
 	// selected trace, even when no match exists (empty id cannot show others).
 	id := detail.Data.TraceID
-	d.Panels[0].Query.Where = append(d.Panels[0].Query.Where, "trace_id = '"+strings.ReplaceAll(id, "'", "''")+"'")
+	d.Panels[0].Query.Where = append(d.Panels[0].Query.Where, "trace_id = "+sqlLiteral(id))
 	out, err := s.executeFragment(ctx, query.RunRequest{Dashboard: d})
 	if err != nil {
 		return nil, PanelFragment{}, err

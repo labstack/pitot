@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,9 @@ import (
 	"github.com/labstack/pitot/internal/queryrows"
 	"github.com/labstack/pitot/internal/telemetry"
 )
+
+// summaryRelations are the rollup summary tables a snapshot read can name.
+var summaryRelations = []string{"receiver_rollup", "receiver_points", "resource_rollup", "receiver_entity_rollup"}
 
 type snapshotSQL interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
@@ -52,31 +56,28 @@ func signalWindowBounded(columns []string, s *telemetry.Signal) bool {
 	return false
 }
 
+// physicalSource enumerates the captured files even for broad selections.
+// A glob plus filename IN becomes expensive at larger file counts. The caller's
+// pin keeps these exact immutable paths available through row consumption.
 func (d *Duck) physicalSource(signal string, batches []telemetry.BatchMetadata) string {
 	s, _ := telemetry.LookupSignal(signal)
 	sort.SliceStable(batches, func(i, j int) bool {
-		a, _ := batchTime(batches[i], signal)
-		b, _ := batchTime(batches[j], signal)
+		a, _ := batches[i].Signal(s)
+		b, _ := batches[j].Signal(s)
 		if a.MaxNanos != b.MaxNanos {
 			return a.MaxNanos > b.MaxNanos
 		}
 		return batches[i].ID < batches[j].ID
 	})
+	store := d.repository.Parquet
 	files := make([]string, 0, len(batches))
 	for _, b := range batches {
-		files = append(files, sqlLiteral(filepath.ToSlash(filepath.Join(d.repository.Parquet.Dir(), "batches", b.ID+".batch", signal+".parquet"))))
+		files = append(files, sqlLiteral(filepath.ToSlash(filepath.Join(store.BatchPath(b.ID), signal+".parquet"))))
 	}
 	if len(files) == 0 {
-		files = append(files, sqlLiteral(filepath.ToSlash(filepath.Join(d.repository.Parquet.Dir(), "batches", "_schema.batch", signal+".parquet"))))
+		files = append(files, sqlLiteral(filepath.ToSlash(filepath.Join(store.BatchesDir(), telemetry.SchemaBatch, signal+".parquet"))))
 	}
 	return "SELECT " + rawProjection(s) + " FROM read_parquet([" + strings.Join(files, ",") + "], union_by_name=false, hive_partitioning=false)"
-}
-
-// snapshotSource enumerates the captured files even for broad selections.
-// A glob plus filename IN becomes expensive at larger file counts. The caller's
-// pin keeps these exact immutable paths available through row consumption.
-func (d *Duck) snapshotSource(signal string, selected, _ []telemetry.BatchMetadata) string {
-	return d.physicalSource(signal, selected)
 }
 
 func (d *Duck) batchIDColumn(signal, filename string) string {
@@ -122,7 +123,7 @@ func (d *Duck) bindRollupSnapshotFiles(ctx context.Context, tx *sql.Tx, batches 
 				selected = append(selected, b)
 			}
 		}
-		physical := d.snapshotSource(s.Name, selected, batches)
+		physical := d.physicalSource(s.Name, selected)
 		if _, err := tx.ExecContext(ctx, "CREATE OR REPLACE TEMP VIEW "+s.Name+" AS "+cleanSource(s.Name, physical)); err != nil {
 			return nil, err
 		}
@@ -149,7 +150,7 @@ func (d *Duck) bindSnapshot(ctx context.Context, db snapshotSQL, query string, w
 	batches := d.repository.Parquet.BatchMetadata()
 	sources := map[string]string{}
 	summaries := false
-	for _, name := range []string{"receiver_rollup", "receiver_points", "resource_rollup", "receiver_entity_rollup"} {
+	for _, name := range summaryRelations {
 		if _, used := compiled.names[name]; used {
 			sources[name] = "SELECT * FROM " + name
 			summaries = true
@@ -204,7 +205,7 @@ func (d *Duck) bindSnapshot(ctx context.Context, db snapshotSQL, query string, w
 				return "", err
 			}
 		}
-		physical := d.snapshotSource(signal, selected, batches)
+		physical := d.physicalSource(signal, selected)
 		sources["telemetry."+signal] = physical
 		sources[signal] = cleanSource(signal, physical)
 	}
@@ -322,13 +323,7 @@ func compileRelations(ctx context.Context, db snapshotSQL, query string, sources
 						template = parsed["statements"].([]any)[0].(map[string]any)["node"].(map[string]any)["from_table"].(map[string]any)
 						templates[key] = template
 					}
-					encoded, _ := json.Marshal(template)
-					var replacement map[string]any
-					decoder := json.NewDecoder(strings.NewReader(string(encoded)))
-					decoder.UseNumber()
-					if err := decoder.Decode(&replacement); err != nil {
-						return err
-					}
+					replacement := clone(template)
 					alias, _ := v["alias"].(string)
 					if alias == "" {
 						alias = name
@@ -438,7 +433,7 @@ func (d *Duck) compileSnapshot(ctx context.Context, db snapshotSQL, query string
 	}
 	d.snapshotMisses.Add(1)
 	aliases := map[string]string{}
-	names := []string{"trace_exemplars", "resource_inventory", "receiver_rollup", "receiver_points", "resource_rollup", "receiver_entity_rollup"}
+	names := append([]string{"trace_exemplars", "resource_inventory"}, summaryRelations...)
 	for _, s := range telemetry.Signals {
 		names = append(names, "telemetry."+s.Name, s.Name)
 	}
@@ -472,7 +467,7 @@ func bindCompiledSnapshot(compiled compiledSnapshot, sources map[string]string) 
 			return "", fmt.Errorf("missing snapshot relation %s", name)
 		}
 		materialization := " AS ("
-		if name == "trace_exemplars" || name == "receiver_rollup" || name == "receiver_points" || name == "resource_rollup" || name == "receiver_entity_rollup" {
+		if name == "trace_exemplars" || slices.Contains(summaryRelations, name) {
 			// These sources can have several consumers. Inline them so their
 			// time/key predicates reach scans instead of copying every retained
 			// exemplar or receiver payload into a temporary relation.

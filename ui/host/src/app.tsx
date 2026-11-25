@@ -6,7 +6,7 @@ import { threadHistoryQueryKey } from "./api";
 import { activityLabel, PitotAppContext, runErrorMessage, type TurnOptions } from "./app-context";
 import AuthGate, { authorizedFetch, useRuntimeStatus } from "./auth";
 import { createID } from "./id";
-import { dashboardsKey } from "./dashboards/api";
+import { dashboardKey, dashboardsKey, dashboardVersionsKey } from "./dashboards/api";
 import { dashboardToolResult } from "./dashboard-tool-result";
 import Shell from "./shell";
 
@@ -46,6 +46,12 @@ function Session() {
 
   function clearActivity() { toolCallsRef.current.clear(); setActivity(""); }
   function isAbort(cause: unknown) { return stoppingRef.current || cause instanceof Error && cause.name === "AbortError"; }
+  /** Ends the current run: without a failure it was stopped, with one the failure is shown. */
+  function endRun(failure?: string) {
+    if (failure === undefined) { setError(""); setStopped(true); } else setError(failure);
+    setRunning(false);
+    clearActivity();
+  }
 
   // Keyed on the thread, not on the route. Naming a draft moves the same
   // conversation from /chat to /chat/<id>; restarting the session there would
@@ -100,14 +106,12 @@ function Session() {
         const saved = dashboardToolResult(event.toolCallId, event.content, next);
         if (!saved) return;
         void queryClient.invalidateQueries({ queryKey: dashboardsKey });
-        void queryClient.invalidateQueries({ queryKey: ["dashboard", saved.id] });
-        void queryClient.invalidateQueries({ queryKey: ["dashboard-versions", saved.id] });
+        void queryClient.invalidateQueries({ queryKey: dashboardKey(saved.id) });
+        void queryClient.invalidateQueries({ queryKey: dashboardVersionsKey(saved.id) });
       },
       onRunErrorEvent: ({ event }) => {
-        if (event.code === "abort" || stoppingRef.current) {setError("");setStopped(true);}
-        else {console.warn("Agent run error", event.code);setError(runErrorMessage(event.code));}
-        setRunning(false);
-        clearActivity();
+        if (event.code === "abort" || stoppingRef.current) endRun();
+        else {console.warn("Agent run error", event.code);endRun(runErrorMessage(event.code));}
       },
       onRunFinalized: ({ messages: next }) => {
         const finished = [...next];
@@ -123,10 +127,8 @@ function Session() {
         void queryClient.invalidateQueries({ queryKey: threadHistoryQueryKey });
       },
       onRunFailed: (failure) => {
-        if (isAbort(failure.error)) {setError("");setStopped(true);}
-        else {console.error("Agent run failed", failure);setError(runErrorMessage());}
-        setRunning(false);
-        clearActivity();
+        if (isAbort(failure.error)) endRun();
+        else {console.error("Agent run failed", failure);endRun(runErrorMessage());}
         // A run that did not finish may have persisted nothing, so stop
         // treating this id as a draft: coming back to it must ask the server
         // rather than open an empty pane over a thread that does exist.
@@ -160,10 +162,8 @@ function Session() {
       const { context = [], ...forwardedProps } = turnOptionsRef.current;
       await agent.runAgent({ context, forwardedProps });
     } catch (cause) {
-      if (isAbort(cause)) {setError("");setStopped(true);}
-      else {console.error("Agent run failed", cause);setError(runErrorMessage());}
-      setRunning(false);
-      clearActivity();
+      if (isAbort(cause)) endRun();
+      else {console.error("Agent run failed", cause);endRun(runErrorMessage());}
       draftsRef.current.delete(threadID);
     }
   }
@@ -192,7 +192,7 @@ function Session() {
   }, [ready, routeThreadID, threadID]);
 
   function submit(event: FormEvent) { event.preventDefault(); void send(input); }
-  function stop() { stoppingRef.current = true;setError("");setStopped(true);agent.abortRun(); setRunning(false); clearActivity(); draftsRef.current.delete(threadID); }
+  function stop() { stoppingRef.current = true; agent.abortRun(); endRun(); draftsRef.current.delete(threadID); }
   function retry() { if (!running && agent.messages.some((message) => message.role === "user")) void run(); }
   function openChat(prompt?: string, options?: TurnOptions) {
     if (!agentAvailable) return;

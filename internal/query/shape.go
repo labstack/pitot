@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"github.com/labstack/pitot/internal/suggest"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -80,7 +81,7 @@ func CompatibleVizzes(q *Spec, vars map[string]Variable, prepared ...[]Measure) 
 func queryShapeVariables(q *Spec, vars map[string]Variable, path string, problems *Problems) {
 	for _, ref := range varRefs(strings.Join(q.Where, " ")) {
 		if _, ok := vars[ref]; !ok {
-			problems.addHint(path+".where", fmt.Sprintf("$%s is not a dashboard variable", ref), suggest.Spelling(ref, mapKeys(vars)))
+			problems.addHint(path+".where", fmt.Sprintf("$%s is not a dashboard variable", ref), suggest.Spelling(ref, slices.Collect(maps.Keys(vars))))
 		}
 	}
 }

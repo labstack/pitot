@@ -2,14 +2,14 @@ import { DataState, Notice, PageHeader, defaultContentWidths } from "@labstack/u
 import type { Message } from "@ag-ui/client";
 import { ActionIcon, Box, Button, Container, Group, Paper, Stack, Table, Text, Textarea, Title, Tooltip, Typography, UnstyledButton } from "@mantine/core";
 import { Check, Copy, PaperPlaneTilt, Stop, CaretDown, CaretRight, ArrowDown } from "@phosphor-icons/react";
-import { lazy, Suspense, useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toolFailureLabel, usePitotApp, useDashboardReceipts } from "./app-context";
 import { useTurnAnchor } from "./chat-scroll";
 import { BrandMark } from "./brand";
 import { useCopy } from "./copy";
-import { exactTimestamp } from "../../format";
+import { exactTimestamp, plural } from "../../format";
 import { mcpAppContent, type MCPAppContent } from "./mcp-app-content";
 import { fragmentTitle } from "../../panels/fragment";
 import { interruptedResult } from "./dashboard-receipt";
@@ -17,6 +17,8 @@ import { jsonObject, mutationNames, object } from "./dashboard-tool-result";
 import { DashboardReceiptView } from "./dashboard-receipt-view";
 
 const MCPAppFrame = lazy(() => import("./mcp-app-frame"));
+const numericCell = /^[-+−]?\d[\d,.]*(?:%|\s?(?:ms|s|K|M))?$/;
+const clockTime = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
 const isPreset = (content: MCPAppContent) => content.tool_result.view.kind === "preset";
 type AppView = { content: MCPAppContent; expanded: boolean };
@@ -100,8 +102,8 @@ function ToolFailures({failures}:{failures:ToolFailure[]}) {
   const [expanded,setExpanded]=useState({rejected:false,failed:false});
   const rejected = failures.filter(f => f.rejected), failed = failures.filter(f => !f.readOnly && !f.rejected);
   const groups = [
-    {key:"rejected",items:rejected,label:`${rejected.length} ${rejected.length === 1 ? "draft" : "drafts"} rejected`},
-    {key:"failed",items:failed,label:`${failed.length} ${failed.length === 1 ? "step" : "steps"} failed`},
+    {key:"rejected",items:rejected,label:`${plural(rejected.length, "draft")} rejected`},
+    {key:"failed",items:failed,label:`${plural(failed.length, "step")} failed`},
   ] as const;
   return <Box data-chat-anchor>
     {failures.some(f => f.readOnly) && <Text size="sm" c="dimmed">Not saved: Explain is read-only</Text>}
@@ -125,7 +127,7 @@ function ChatAppView({ view }: { view: AppView }) {
   // The kinds of chart already say what a view shows; only what went wrong is counted.
   const status = fragment.dashboard.panels.length>1
     ? Array.from(counts,([status,count])=>`${count} ${status}`).join(" · ")
-    : counts.size ? [...counts.keys()].join(", ") : `${rows} ${rows === 1 ? "row" : "rows"}`;
+    : counts.size ? [...counts.keys()].join(", ") : plural(rows, "row");
   return <Paper data-chat-app data-chat-anchor withBorder radius="md" style={{ overflow: "hidden" }}>
     <UnstyledButton className="chat-app-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><span className="chat-app-chevron" aria-hidden="true">{expanded ? <CaretDown size={14} /> : <CaretRight size={14} />}</span><span className="chat-app-summary">{[title, viz, status].filter(Boolean).join(" · ")}</span></UnstyledButton>
     {expanded && <Suspense fallback={<DataState state="loading" loadingLabel="Preparing view…" />}><MCPAppFrame content={view.content} /></Suspense>}
@@ -144,29 +146,37 @@ export function ChatPage() {
   const receipts = useDashboardReceipts(messages);
   const lastSent = messages.filter((message) => message.role === "user").at(-1)?.id;
   const { scrollRef, contentRef, turnRef, showJump, jumpToLatest } = useTurnAnchor<HTMLDivElement, HTMLDivElement>(lastSent);
-  if (!agentAvailable) return <Container size="sm" py={96}><Paper withBorder radius="md" p={{ base: "xl", sm: 40 }}><Stack gap="md"><Text fw={700} size="xs" tt="uppercase" lts="0.12em">Optional capability</Text><PageHeader title="Chat" description="Chat is not configured" /><Text c="dimmed">Add an AI provider key to enable chat. Telemetry ingest, dashboards, traces, logs, and metrics remain available without it.</Text><Button component="a" href="/dashboards" variant="light" mt="sm">Open dashboards</Button></Stack></Paper></Container>;
-  const appViews = chatAppViews(messages);
-  const failures = toolFailures(messages);
-  const visibleMessages = messages.filter((message) => {
+  const appViews = useMemo(() => chatAppViews(messages), [messages]);
+  const failures = useMemo(() => toolFailures(messages), [messages]);
+  const visibleMessages = useMemo(() => messages.filter((message) => {
     if(appViews.duplicates.has(message.id)) return false;
     if(message.role === "tool") return failures.has(message.id);
     if(message.role === "assistant") return !message.toolCalls?.length && typeof message.content === "string" && message.content.trim().length > 0;
     if(message.role === "activity") return message.activityType === "mcp-app" || message.activityType === "agent-outcome";
     return message.role === "user";
-  });
+  }), [messages, appViews, failures]);
   // Tool receipts can finish before the buffered final answer. Only text in
   // the current user turn replaces its running status.
-  const turnStart = messages.findIndex(message => message.id === lastSent);
-  const hasFinalText = messages.slice(turnStart + 1).some(message => message.role === "assistant" && !message.toolCalls?.length && typeof message.content === "string" && message.content.length > 0);
-  const answer = messages.slice(turnStart + 1).filter(message => message.role === "assistant" && !message.toolCalls?.length && typeof message.content === "string" && message.content.trim().length > 0).at(-1);
+  const { hasFinalText, answer } = useMemo(() => {
+    const turnStart = messages.findIndex(message => message.id === lastSent);
+    const current = messages.slice(turnStart + 1);
+    return {
+      hasFinalText: current.some(message => message.role === "assistant" && !message.toolCalls?.length && typeof message.content === "string" && message.content.length > 0),
+      answer: current.filter(message => message.role === "assistant" && !message.toolCalls?.length && typeof message.content === "string" && message.content.trim().length > 0).at(-1),
+    };
+  }, [messages, lastSent]);
   // Keep each turn's wrapper when the next question arrives so iframe views
   // retain their mounted state as the current turn becomes history.
-  const turns: Array<{ id: string; messages: Message[] }> = [];
-  for (const message of visibleMessages) {
-    if (message.role === "user" || turns.length === 0) turns.push({ id: message.id, messages: [] });
-    turns.at(-1)!.messages.push(message);
-  }
-  if (turns.length === 0) turns.push({ id: "draft", messages: [] });
+  const turns = useMemo(() => {
+    const grouped: Array<{ id: string; messages: Message[] }> = [];
+    for (const message of visibleMessages) {
+      if (message.role === "user" || grouped.length === 0) grouped.push({ id: message.id, messages: [] });
+      grouped.at(-1)!.messages.push(message);
+    }
+    if (grouped.length === 0) grouped.push({ id: "draft", messages: [] });
+    return grouped;
+  }, [visibleMessages]);
+  if (!agentAvailable) return <Container size="sm" py={96}><Paper withBorder radius="md" p={{ base: "xl", sm: 40 }}><Stack gap="md"><Text fw={700} size="xs" tt="uppercase" lts="0.12em">Optional capability</Text><PageHeader title="Chat" description="Chat is not configured" /><Text c="dimmed">Add an AI provider key to enable chat. Telemetry ingest, dashboards, traces, logs, and metrics remain available without it.</Text><Button component="a" href="/dashboards" variant="light" mt="sm">Open dashboards</Button></Stack></Paper></Container>;
   const renderMessage = (message: Message) => failures.has(message.id)
     ? <ToolFailures key={message.id} failures={failures.get(message.id)!} />
     : <Box key={message.id}>
@@ -264,7 +274,7 @@ function ChatMessage({ message, time, appView }: { message: Message; time?: numb
   const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
   if (!content && message.role === "assistant") return null;
   const user = message.role === "user";
-  const stamp = time ? new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(time)) : "";
+  const stamp = time ? clockTime.format(new Date(time)) : "";
   return <Box className="chat-message" data-chat-anchor data-role={user ? "user" : "assistant"}>
     {user
       ? <Paper radius="md" px="md" py="sm" bg="var(--labstack-inset)" maw="70%" ml="auto" w="fit-content"><Text style={{ whiteSpace: "pre-wrap" }}>{content}</Text></Paper>
@@ -296,7 +306,7 @@ function answerStructure() {
         const text = (cell: MarkdownNode): string => cell.value ?? cell.children?.map(text).join("") ?? "";
         const rows = node.children.slice(1);
         node.align = (node.children[0]?.children ?? []).map((_, index) =>
-          rows.length && rows.every(row => /^[-+−]?\d[\d,.]*(?:%|\s?(?:ms|s|K|M))?$/.test(text(row.children?.[index] ?? {type: "text"}).trim())) ? "right" : node.align?.[index] ?? null);
+          rows.length && rows.every(row => numericCell.test(text(row.children?.[index] ?? {type: "text"}).trim())) ? "right" : node.align?.[index] ?? null);
       }
       if (node.type === "heading" && node.depth !== undefined) {
         const depth = node.depth;
@@ -319,7 +329,7 @@ const markdownComponents: Components = {
   tbody: ({ children }) => <Table.Tbody>{children}</Table.Tbody>,
   tr: ({ children }) => <Table.Tr>{children}</Table.Tr>,
   th: ({ children, style }) => <Table.Th style={style}>{children}</Table.Th>,
-  td: ({ children, style }) => <Table.Td style={style} ta={typeof children === "string" && /^[-+−]?\d[\d,.]*(?:%|\s?(?:ms|s|K|M))?$/.test(children.trim()) ? "right" : undefined} ff={typeof children === "string" && /^[-+−]?\d/.test(children.trim()) ? "monospace" : undefined}>{children}</Table.Td>,
+  td: ({ children, style }) => <Table.Td style={style} ta={typeof children === "string" && numericCell.test(children.trim()) ? "right" : undefined} ff={typeof children === "string" && /^[-+−]?\d/.test(children.trim()) ? "monospace" : undefined}>{children}</Table.Td>,
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
 };

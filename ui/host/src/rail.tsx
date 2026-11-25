@@ -4,7 +4,8 @@ import { useDebouncedValue } from "@mantine/hooks";
 import { Bell, ChatCircle, SquaresFour, Gear, Compass, DotsThree, ListMagnifyingGlass, MagnifyingGlass, Path, PencilSimple, Plus, Sparkle, Star, Trash } from "@phosphor-icons/react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
-import { getJSON, threadHistoryQueryKey } from "./api";
+import { threadHistoryQueryKey } from "./api";
+import { servicesQuery } from "./alerts/api";
 import { formatTimestamp } from "../../panels/units";
 import { authorizedFetch } from "./auth";
 import { dashboardsKey, dashboardsStaleTime, listDashboards } from "./dashboards/api";
@@ -80,15 +81,14 @@ export default function Rail({ collapsed = false, agentAvailable, activeThreadID
   // looked only at what the user had already named. The catalogue is fetched
   // only once someone is actually searching.
   const schema = useQuery({
-    queryKey: ["telemetry-schema", "1h"],
-    queryFn: () => getJSON<{ services: Array<{ value: string; count?: number }> }>("/api/telemetry/schema?window=1h"),
+    ...servicesQuery,
     enabled: agentAvailable && Boolean(query) && Boolean(onInvestigateService),
     staleTime: 60_000,
   });
   const matchingServices = useMemo(() => {
     if (!query) return [];
     const needle = query.toLowerCase();
-    return (schema.data?.services ?? []).map((entry) => entry.value).filter((service) => service.toLowerCase().includes(needle)).slice(0, 6);
+    return (schema.data ?? []).filter((service) => service.toLowerCase().includes(needle)).slice(0, 6);
   }, [schema.data, query]);
   const visibleDashboards = useMemo(() => {
     const items = dashboards.data ?? [];

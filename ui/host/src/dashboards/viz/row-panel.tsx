@@ -11,6 +11,7 @@ import type { AnalysisProps } from "./analysis-chart";
 import { TableViz, type TableCellProps } from "./table";
 import { RowText } from "./cell-text";
 import { seriesSlot } from "../../../../chart";
+import { plural } from "../../../../format";
 
 const traceIdStyle: CSSProperties = { display: "block", width: "17ch", fontSize: "12px", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const traceStatuses: Record<string, string> = { STATUS_CODE_ERROR: "Error", STATUS_CODE_OK: "OK", STATUS_CODE_UNSET: "Unset" };
@@ -88,7 +89,7 @@ export function RowPanel(props: AnalysisProps) {
   return <div role="region" aria-label={`${props.title ?? props.panel.title}: ${model.rows.length} rows`}>
     <TableViz foldConstants={props.foldConstants} traceLinks={props.traceLinks} controls={props.controls} panel={props.panel} result={props.result} height={props.height} renderCell={cell} onPoint={props.onPoint} />
     {props.panel.viz === "log_patterns" && <Text data-pattern-summary c="dimmed" fz={12} style={{marginTop:8,flexShrink:0}}>
-      {model.rows.length} {model.rows.length === 1 ? "pattern" : "patterns"} · {patternEvents.toLocaleString()} {patternEvents === 1 ? "event" : "events"} in the window{props.result.frame?.truncated ? " (shown)" : ""}
+      {plural(model.rows.length, "pattern")} · {patternEvents.toLocaleString()} {patternEvents === 1 ? "event" : "events"} in the window{props.result.frame?.truncated ? " (shown)" : ""}
     </Text>}
   </div>;
 }

@@ -166,6 +166,15 @@ func (s *Service) List(ctx context.Context, ownerID string) ([]Summary, error) {
 }
 
 func (s *Service) Get(ctx context.Context, ownerID, id string) (Record, error) {
+	if err := requireOwner(ownerID); err != nil {
+		return Record{}, err
+	}
+	// A hit means the owner already has dashboards, so only a miss can need
+	// the initial dashboard.
+	record, err := s.get(ctx, ownerID, id)
+	if !errors.Is(err, ErrNotFound) {
+		return record, err
+	}
 	if err := s.ensureInitial(ctx, ownerID); err != nil {
 		return Record{}, err
 	}
@@ -509,10 +518,18 @@ func (s *Service) Versions(ctx context.Context, ownerID, id string) ([]VersionIn
 	return out, nil
 }
 
-// ensureInitial gives an owner with no dashboards the default one.
-func (s *Service) ensureInitial(ctx context.Context, ownerID string) error {
+// requireOwner rejects a blank owner ID.
+func requireOwner(ownerID string) error {
 	if strings.TrimSpace(ownerID) == "" {
 		return errors.New("dashboard owner is required")
+	}
+	return nil
+}
+
+// ensureInitial gives an owner with no dashboards the default one.
+func (s *Service) ensureInitial(ctx context.Context, ownerID string) error {
+	if err := requireOwner(ownerID); err != nil {
+		return err
 	}
 	count, err := generated.New(s.db).CountDashboards(ctx, ownerID)
 	if err != nil || count > 0 {
